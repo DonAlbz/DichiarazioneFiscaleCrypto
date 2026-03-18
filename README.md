@@ -5,6 +5,7 @@ Calcolo automatico del prezzo medio di carico e delle plusvalenza fiscalmente ri
 I file devono essere posizionati in questo modo:
 
 ```plaintext
+main.py
 binance/
 ├── api/
 │   └── api.csv
