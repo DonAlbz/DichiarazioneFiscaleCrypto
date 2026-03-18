@@ -10,7 +10,7 @@ I file devono essere posizionati in questo modo:
 
 
 
-```text
+```plaintext
 
 main.py
 
