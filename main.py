@@ -279,7 +279,7 @@ def load_quotes(quotes_dir=BINANCE_BASE_DIR + "/quotazioni/"):
         return quotes_series
 
     except Exception as e:
-        print(f"   ❌ Errore caricamento quotazioni: {e}")
+        print(f"Errore caricamento quotazioni: {e}")
         import traceback
         traceback.print_exc()
         return None
