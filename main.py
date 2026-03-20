@@ -115,6 +115,8 @@ def load_asset(start_ts, end_ts, asset_dir = BINANCE_BASE_DIR + "/asset/"):
         df = df[(df['UTC_Time'] >= start_ts) & (df['UTC_Time'] <= end_ts)]
         print(f"   Righe nel periodo {START_DATE} - {END_DATE}: {len(df)}")
 
+        #
+
         # IMPORTANTE: Rimuove dal dataframe operazioni non necessarie
 
         skip_operations = [
@@ -148,7 +150,7 @@ def load_asset(start_ts, end_ts, asset_dir = BINANCE_BASE_DIR + "/asset/"):
         print(f"Righe rimanenti dal master: {len(df)}")
 
         # elimino righe vuote
-        df = df.dropna()
+        #df = df.dropna()
 
         # Lista di tutte le operazioni
         operations = []
@@ -339,10 +341,14 @@ if __name__ == '__main__':
     # print(quotazioni['USDC-EUR'][:])
     start_dt = pd.to_datetime(START_DATE)
     end_dt = pd.to_datetime(END_DATE)
-    operazioni = load_asset(start_dt, end_dt )
+    operazioni = load_asset(start_dt, end_dt)
     if operazioni:
         # Converto la lista di dizionari in un DataFrame
         df_ops = pd.DataFrame(operazioni)
+        # Controllo se le prime 10 operazioni corrispondono
+        print("Stampo prime 10 operazioni")
+        print(df_ops[['timestamp', 'operation', 'change', 'remark']].head(10).to_string(index=False))
+        print(len(df_ops))
 
         # Filtro per BNB
         bnb_ops = df_ops[df_ops['coin'] == 'BNB']
