@@ -146,7 +146,7 @@ def load_asset(start_ts, end_ts, asset_dir = BINANCE_BASE_DIR + "/asset/"):
 
         df_before_skip = len(df)
         df = df[~df['Operation'].isin(skip_operations)]
-        print(f"Skippate {df_before_skip - len(df)} operazioni già presenti in altri file")
+        print(f"Dal totale delle operazioni sono state filtrate {df_before_skip - len(df)} operazioni")
         print(f"Righe rimanenti dal master: {len(df)}")
 
         # elimino righe vuote
@@ -181,10 +181,10 @@ def load_asset(start_ts, end_ts, asset_dir = BINANCE_BASE_DIR + "/asset/"):
             new_operations[operation] += 1
 
 
-        print(f"   Operazioni uniche da aggiungere: {len(operations)}")
+        # print(f"   Operazioni uniche da aggiungere: {len(operations)}")
 
         if len(operations) > 0:
-            print(f"\n   📊 Nuove operazioni per tipo (top 15):")
+            print(f"\n      Nuove operazioni per tipo (top 15):")
             sorted_ops = sorted(new_operations.items(), key=lambda x: -x[1])
             for op, count in sorted_ops[:15]:
                 print(f"      {op:<50} {count:>5}x")
@@ -274,9 +274,9 @@ def load_quotes(quotes_dir=BINANCE_BASE_DIR + "/quotazioni/"):
             # Assicurati che l'indice sia ordinato per la ricerca veloce
             quotes_series[quote] = s.sort_index()
 
-            print(f"   ✓ Caricate {len(quotes_series[quote]):,} quotazioni {quote}")
+            print(f"Caricate {len(quotes_series[quote]):,} quotazioni {quote}")
             print(
-                f"   📅 Periodo: {quotes_series[quote].index[0].strftime('%Y-%m-%d')} → {quotes_series[quote].index[-1].strftime('%Y-%m-%d')}")
+                f"Periodo: {quotes_series[quote].index[0].strftime('%Y-%m-%d')} → {quotes_series[quote].index[-1].strftime('%Y-%m-%d')}")
 
         return quotes_series
 
@@ -334,6 +334,135 @@ def extract_base_quote_from_pair(pair):
         return pair[:-3], pair[-3:]
 
 
+def load_scambi(base_dir):
+    """
+    Carica scambi da CSV
+    IMPORTANTE: Ogni trade genera MULTIPLE righe nel CSV master (Buy, Sell, Fee)
+    Quindi per ogni trade va verificato quale coin è stata acquistata e quale venduta
+    """
+    operations = []
+    scambi_dir = os.path.join(base_dir, 'scambi')
+
+    if not os.path.exists(scambi_dir):
+        print(f"    Directory scambi non trovata: {scambi_dir}")
+        return operations
+
+    print("Caricamento SCAMBI:")
+
+    files = glob.glob(os.path.join(scambi_dir, '*.csv'))
+
+    if not files:
+        print(f"   Nessun file CSV trovato in {scambi_dir}")
+        return operations
+
+    total_loaded = 0
+    total_errors = 0
+
+    for file in files:
+        try:
+            df = pd.read_csv(file)
+            file_ops = 0
+
+            # DEBUG: Mostra prime righe
+            # print(f"\n   DEBUG - Prime 3 righe di {os.path.basename(file)}:")
+            # for _, row in df.head(3).iterrows():
+            #     print(f"      {row['Date(UTC)']} | {row['Pair']} | {row['Side']}")
+
+            # Colonne: Date(UTC), Pair, Side, Price, Executed, Amount, Fee
+
+            for idx, row in df.iterrows():
+                try:
+                    timestamp = pd.to_datetime(row['Date(UTC)'])
+                    pair = row['Pair']
+                    side = row['Side']
+
+                    # Parse Executed (es. '965.6EUR')
+                    executed_val, executed_coin = parse_amount_with_currency(row['Executed'])
+
+                    # Parse Amount (es. '1144.62224USDC')
+                    amount_val, amount_coin = parse_amount_with_currency(row['Amount'])
+
+                    # Parse Fee
+                    fee_val, fee_coin = parse_amount_with_currency(row['Fee'])
+
+                    # Determina base e quote dal pair
+                    base, quote = extract_base_quote_from_pair(pair)
+
+                    if side == 'BUY':
+                        # BUY: COMPRI la BASE del pair PAGANDO la QUOTE
+                        # Esempio: BUY POLUSDT @ 0.3998
+                        #   - Executed: 375POL → AGGIUNGERE (ricevi POL)
+                        #   - Amount: 149.925USDT → SOTTRARRE (paghi USDT)
+                        #   - Fee: 0.375POL → SOTTRARRE (paghi fee in POL)
+                        operations.append({
+                            'timestamp': timestamp,
+                            'operation': 'BUY',
+                            'coin': executed_coin if executed_coin else base,  # BASE: da AGGIUNGERE
+                            'change': executed_val,  # Positivo
+                            'quote_coin': amount_coin if amount_coin else quote,  # QUOTE: da SOTTRARRE
+                            'quote_amount': amount_val,
+                            'fee': fee_val,
+                            'fee_coin': fee_coin,
+                            'source': 'scambi',
+                            # IMPORTANTE: Aggiungi fingerprint multipli per deduplicazione con master
+                            'master_fingerprints': [
+                                # 1. Buy coin (executed) - positivo
+                                f"{timestamp.strftime('%Y-%m-%d %H:%M')}|{executed_coin}|{executed_val:.8f}",
+                                # 2. Sell quote_coin (amount) - negativo nel master
+                                f"{timestamp.strftime('%Y-%m-%d %H:%M')}|{amount_coin}|{-amount_val:.8f}",
+                                # 3. Fee - negativo
+                                f"{timestamp.strftime('%Y-%m-%d %H:%M')}|{fee_coin}|{-fee_val:.8f}" if fee_val > 0 else None
+                            ]
+                        })
+                    else:  # SELL
+                        # SELL: VENDI la BASE del pair RICEVENDO la QUOTE
+                        # Esempio: SELL EURUSDC @ 1.1854
+                        #   - Executed: 965.6EUR → SOTTRARRE (vendi EUR)
+                        #   - Amount: 1144.62USDC → AGGIUNGERE (ricevi USDC)
+                        #   - Fee: 1.14USDC → SOTTRARRE (paghi fee in USDC)
+                        operations.append({
+                            'timestamp': timestamp,
+                            'operation': 'SELL',
+                            'coin': executed_coin if executed_coin else base,  # BASE: da SOTTRARRE
+                            'change': -executed_val,  # Negativo
+                            'quote_coin': amount_coin if amount_coin else quote,  # QUOTE: da AGGIUNGERE
+                            'quote_amount': amount_val,
+                            'fee': fee_val,
+                            'fee_coin': fee_coin,
+                            'source': 'scambi',
+                            # IMPORTANTE: Fingerprint multipli
+                            'master_fingerprints': [
+                                # 1. Sell coin (executed) - negativo
+                                f"{timestamp.strftime('%Y-%m-%d %H:%M')}|{executed_coin}|{-executed_val:.8f}",
+                                # 2. Buy quote_coin (amount) - positivo nel master
+                                f"{timestamp.strftime('%Y-%m-%d %H:%M')}|{amount_coin}|{amount_val:.8f}",
+                                # 3. Fee - negativo
+                                f"{timestamp.strftime('%Y-%m-%d %H:%M')}|{fee_coin}|{-fee_val:.8f}" if fee_val > 0 else None
+                            ]
+                        })
+
+                    # Conteggio (fuori da if/else - conta sia BUY che SELL)
+                    file_ops += 1
+                    total_loaded += 1
+
+                except Exception as e:
+                    total_errors += 1
+                    if total_errors <= 3:  # Mostra solo i primi 3 errori
+                        print(f"    ️  Errore riga {idx}: {e}")
+
+            print(f"   ✓ {os.path.basename(file)}: {file_ops} scambi caricati (su {len(df)} righe)")
+
+        except Exception as e:
+            print(f"     Errore file {os.path.basename(file)}: {e}")
+
+    if total_errors > 3:
+        print(f"   ️  ...e altri {total_errors - 3} errori")
+
+    print(f"   TOTALE: {total_loaded} scambi caricati da {len(files)} file\n")
+
+    return operations
+
+
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
     #print("Percorso corrente:", os.getcwd())
@@ -345,19 +474,20 @@ if __name__ == '__main__':
     if operazioni:
         # Converto la lista di dizionari in un DataFrame
         df_ops = pd.DataFrame(operazioni)
+    load_scambi(BINANCE_BASE_DIR)
         # Controllo se le prime 10 operazioni corrispondono
-        print("Stampo prime 10 operazioni")
-        print(df_ops[['timestamp', 'operation', 'change', 'remark']].head(10).to_string(index=False))
-        print(len(df_ops))
-
-        # Filtro per BNB
-        bnb_ops = df_ops[df_ops['coin'] == 'BNB']
-
-        print("\n--- Le prime 10 operazioni BNB ---")
-        print(bnb_ops[['timestamp', 'operation', 'change', 'remark']].head(10).to_string(index=False))
-
-        # Calcolo il bilancio totale netto di BNB
-        bilancio_totale = bnb_ops['change'].sum()
-        print(f"\nBilancio finale BNB nel periodo: {bilancio_totale:.8f}")
+        # print("Stampo prime 10 operazioni")
+        # print(df_ops[['timestamp', 'operation', 'change', 'remark']].head(10).to_string(index=False))
+        # print(len(df_ops))
+        #
+        # # Filtro per BNB
+        # bnb_ops = df_ops[df_ops['coin'] == 'BNB']
+        #
+        # print("\n--- Le prime 10 operazioni BNB ---")
+        # print(bnb_ops[['timestamp', 'operation', 'change', 'remark']].head(10).to_string(index=False))
+        #
+        # # Calcolo il bilancio totale netto di BNB
+        # bilancio_totale = bnb_ops['change'].sum()
+        # print(f"\nBilancio finale BNB nel periodo: {bilancio_totale:.8f}")
 
 
