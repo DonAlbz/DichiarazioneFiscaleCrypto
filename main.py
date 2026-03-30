@@ -1,4 +1,5 @@
 from dis import code_info
+from logging import raiseExceptions
 
 # Calcolo del prezzo medio di carico delle crypto detenute sulla base del:
 # - prezzo di acquisto tramite FIAT
@@ -52,6 +53,9 @@ import pandas as pd
 import os
 import glob
 import re
+
+from scipy.stats import false_discovery_control
+
 # Press Maiusc+F10 to execute it or replace it with your code.
 # Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
 COINBASE_INITIAL_FILE = 'D:/730/2026/coinbase_initial_simple.csv'
@@ -485,10 +489,19 @@ def process_all_binance_operations(asset, scambi, initial_portfolio, fiscal_star
     Elabora operazioni con valorizzazione EUR corretta per USDC/USDT
     eurusd_quotes: dict {timestamp: rate} per conversione USD→EUR
     """
-
+    coin_a_pmc_zero = None
     print("\n" + "=" * 80)
     print("ELABORAZIONE OPERAZIONI")
     print("=" * 80 + "\n")
+    risposta = input("Contabilizzare il prezzo medio di carico dei soli token crypto al valore di zero? (Y/n):  ")
+    while not (risposta == 'Y' or risposta == 'y' or risposta == 'n' or risposta == 'N'):
+        if risposta == "n" or risposta == "N":
+            coin_a_pmc_zero = False
+        elif risposta == "y" or risposta == "Y":
+            coin_a_pmc_zero = True
+        else:
+            risposta = input ("Valore inserito non accettato, inserire Y o n:  ")
+
 
 
 
@@ -562,17 +575,54 @@ def process_all_binance_operations(asset, scambi, initial_portfolio, fiscal_star
                 if c == 'EUR':
                     coin_data[c]['total_cost'] += qty
                 elif c =="USDC" and quotazioni is not None:
-                    rate = get_price_at_timestamp(quotazioni['USDC-EUR'],pd.to_datetime(timestamp).normalize())
-                    coin_data[c]['total_cost'] += qty / rate if rate > 0 else qty
-                    print(f"Aggiunto operazione {op_type} per la coint {coin}")
-                    print(f"Trovata quotazione USDC-EUR pari a {rate}")
-                    print(f"Il costo totale coin passa a {coin_data[c]['total_cost']}")
-                    print(f"Il prezzo medio di carico è: {coin_data[c]['total_cost'] / coin_data[c]['quantity']}")
+                    print(f"rilevato deposito USDC in data {timestamp}")
+                    pmc_deposito = input("Inserisci prezzo medio di carico in EUR, oppure N se non disponibile: ")
+
+                    if pmc_deposito.upper() == 'N':
+                        pmc_deposito = 0
+                    else:
+                        try:
+                            pmc_deposito = float(pmc_deposito)
+                        except ValueError:
+                            raise Exception("Valore inserito non valido: inserire un numero o 'N'")
+
+                    # caso in cui ho ricevuto un deposito del quale conosco il prezzo medio di carico
+                    #rate = get_price_at_timestamp(quotazioni['USDC-EUR'],pd.to_datetime(timestamp).normalize())
+                    coin_data[c]['total_cost'] += qty * pmc_deposito if pmc_deposito > 0 else raiseExceptions
+                    # print(f"Aggiunto operazione {op_type} per la coint {coin}")
+                    # print(f"Trovata quotazione USDC-EUR pari a {rate}")
+                    # print(f"Il costo totale coin passa a {coin_data[c]['total_cost']}")
+                    # print(f"Il prezzo medio di carico è: {coin_data[c]['total_cost'] / coin_data[c]['quantity']}")
 
                 elif c in USD_STABLECOINS and quotazioni is not None:
-                    rate = quotazioni[c](timestamp, eurusd_quotes)
-                    coin_data[c]['total_cost'] += qty / rate if rate > 0 else qty
-                # else: costo = 0 (crypto depositate, nessun esborso)
+                    print(f"rilevato deposito nella stablecoin {c} in data {timestamp}")
+                    pmc_deposito = input("Inserisci prezzo medio di carico, oppure N se non disponibile: ")
+
+                    if pmc_deposito.upper() == 'N':
+                        pmc_deposito = 0
+                    else:
+                        try:
+                            pmc_deposito = float(pmc_deposito)
+                        except ValueError:
+                            raise Exception("Valore inserito non valido: inserire un numero o 'N'")
+
+                    rate = quotazioni['EUR-USD'],pd.to_datetime(timestamp).normalize()
+                    coin_data[c]['total_cost'] += qty * rate if rate > 0 else qty
+                else:
+                    if coin_a_pmc_zero == False:
+                        print(f"rilevato deposito nella token coin {c} in data {timestamp}")
+                        pmc_deposito = input("Inserisci prezzo medio di carico in EUR, oppure N se non disponibile: ")
+
+                        if pmc_deposito.upper() == 'N':
+                            pmc_deposito = 0
+                        else:
+                            try:
+                                pmc_deposito = float(pmc_deposito)
+                            except ValueError:
+                                raise Exception("Valore inserito non valido: inserire un numero o 'N'")
+
+                        #rate = quotazioni['EUR-USD'], pd.to_datetime(timestamp).normalize() #caso valore in USD
+                        coin_data[c]['total_cost'] += qty * pmc_deposito if pmc_deposito > 0 else raiseExceptions
 
             # Per operazioni NON-deposit (BUY, REWARD, etc): logica normale
             elif c == 'EUR':
@@ -616,10 +666,10 @@ if __name__ == '__main__':
     # print(quotazioni['USDC-EUR'][:])
     start_dt = pd.to_datetime(START_DATE)
     end_dt = pd.to_datetime(END_DATE)
-    operazioni = load_asset(start_dt, end_dt)
-    if operazioni:
+    assets = load_asset(start_dt, end_dt)
+    if assets:
         # Converto la lista di dizionari in un DataFrame
-        df_ops = pd.DataFrame(operazioni)
+        df_ops = pd.DataFrame(assets)
 
         # Controllo se le prime 10 operazioni corrispondono
         # print("Stampo prime 10 operazioni")
@@ -641,7 +691,7 @@ if __name__ == '__main__':
 # print(isinstance(operazioni, list))
 # print(quotazioni['USDC-EUR']["2025-12-27"])
 
-prova = [{'timestamp': pd.to_datetime('2025-04-21 15:52:33'), 'operation': 'Deposit', 'coin': 'USDC', 'change': 1000, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv'}]
-print(prova[0])
-process_all_binance_operations(prova, None, None, start_dt, end_dt, quotazioni)
+    prova = [{'timestamp': pd.to_datetime('2025-04-21 15:52:33'), 'operation': 'Deposit', 'coin': 'USDC', 'change': 1000, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv'}]
+    print(prova[0])
+    process_all_binance_operations(prova, None, None, start_dt, end_dt, quotazioni)
 
