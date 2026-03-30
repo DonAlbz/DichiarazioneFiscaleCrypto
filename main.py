@@ -537,6 +537,12 @@ def deposita_coin(c, coin_data, qty, timestamp, coin_a_pmc_zero):
         # rate = quotazioni['EUR-USD'], pd.to_datetime(timestamp).normalize() #caso valore in USD
         coin_data[c]['total_cost'] += qty * pmc_deposito if pmc_deposito > 0 else raiseExceptions
     coin_data[c]['Prezzo_Medio_Di_Carico'] = coin_data[c]['total_cost'] / coin_data[c]['quantity']
+    # coin_data[c]['gia_elaborata'] = True
+
+
+def preleva_coin(c, coin_data,qty, timestamp):
+    coin_data[c]['quantity'] -= qty
+
 
 ###################################
 ## ELABORAZIONE DELLE OPERAZIONI ##
@@ -620,6 +626,13 @@ def process_all_binance_operations(asset, scambi, initial_portfolio, fiscal_star
         #     return
         if op_type == 'Deposit':
             deposita_coin(coin, coin_data,change, timestamp, coin_a_pmc_zero)
+        elif op_type == 'Withdraw':
+           preleva_coin(coin, coin_data,change, timestamp)
+
+
+
+        # Al termine dell'elaborazione dell'operazione:
+        op['gia_elaborata'] = True
         # # Helper: aggiunge quantità E costo EUR a una coin
         # def add_coin(c, qty, cost_eur_explicit=None):
         #     """Aggiunge qty a coin c, calcolando il costo EUR corretto"""
@@ -758,7 +771,7 @@ if __name__ == '__main__':
 
         # Controllo se le prime 10 operazioni corrispondono
         # print("Stampo prime 10 operazioni")
-        # print(df_ops[['timestamp', 'operation', 'change', 'remark']].head(10).to_string(index=False))
+        # print(df_ops[['timestamp', 'operation', 'change', 'remark', 'gia_elaborata']].head(10).to_string(index=False))
         # print(len(df_ops))
         #
         # # Filtro per BNB
