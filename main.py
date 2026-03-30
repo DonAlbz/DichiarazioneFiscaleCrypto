@@ -628,7 +628,8 @@ def process_all_binance_operations(asset, scambi, initial_portfolio, fiscal_star
             deposita_coin(coin, coin_data,change, timestamp, coin_a_pmc_zero)
         elif op_type == 'Withdraw':
            preleva_coin(coin, coin_data,change, timestamp)
-
+        # TODO implementare BUY e SELL incrociando i dati con scambi, sfruttando il cambo
+        #gia_elaborata di assets, per non processare due volte la stessa operazione
 
 
         # Al termine dell'elaborazione dell'operazione:
