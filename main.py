@@ -53,6 +53,7 @@ import pandas as pd
 import os
 import glob
 import re
+from datetime import timedelta
 
 from scipy.stats import false_discovery_control
 
@@ -421,7 +422,8 @@ def load_scambi(base_dir):
                             'quote_amount': amount_val,
                             'fee': fee_val,
                             'fee_coin': fee_coin,
-                            'source': 'scambi'
+                            'source': 'scambi',
+                            'gia_elaborata': False
                             # IMPORTANTE: Aggiungi fingerprint multipli per deduplicazione con master
                             # 'master_fingerprints': [
                             #     # 1. Buy coin (executed) - positivo
@@ -447,7 +449,8 @@ def load_scambi(base_dir):
                             'quote_amount': amount_val,
                             'fee': fee_val,
                             'fee_coin': fee_coin,
-                            'source': 'scambi'
+                            'source': 'scambi',
+                            'gia_elaborata': False
                             # IMPORTANTE: Fingerprint multipli
                             # 'master_fingerprints': [
                             #     # 1. Sell coin (executed) - negativo
@@ -544,16 +547,30 @@ def preleva_coin(c, coin_data,qty, timestamp):
     coin_data[c]['quantity'] -= qty
 
 
+def elabora_buy(c, coin_data, qty, timestamp, assets, scambi):
+    start = timestamp - timedelta(minutes=30)
+    end = timestamp + timedelta(minutes=30)
+    print(f"ricerca operazione tra {start} e {end}")
+    risultati = scambi[
+        (scambi['operation'] == 'BUY') &
+        (scambi['coin'] == c) &
+        (scambi['timestamp'].between(start, end)) &
+        (scambi['change'] == qty) &
+        (scambi['gia_elaborata'] == False)
+        ]
+    print(risultati.to_string())
+
+
 ###################################
 ## ELABORAZIONE DELLE OPERAZIONI ##
 ###################################
-
 
 def process_all_binance_operations(asset, scambi, initial_portfolio, fiscal_start, fiscal_end, eurusd_quotes=None):
     """
     Elabora operazioni con valorizzazione EUR corretta per USDC/USDT
     eurusd_quotes: dict {timestamp: rate} per conversione USD→EUR
     """
+    df_scambi =pd.DataFrame(scambi)
     coin_a_pmc_zero = None
     print("\n" + "=" * 80)
     print("ELABORAZIONE OPERAZIONI")
@@ -628,6 +645,8 @@ def process_all_binance_operations(asset, scambi, initial_portfolio, fiscal_star
             deposita_coin(coin, coin_data,change, timestamp, coin_a_pmc_zero)
         elif op_type == 'Withdraw':
            preleva_coin(coin, coin_data,change, timestamp)
+        elif op_type == 'BUY':
+            elabora_buy(coin, coin_data, change, timestamp, assets, df_scambi)
         #TODO implementare BUY e SELL incrociando i dati con scambi, sfruttando il cambo
         #gia_elaborata di assets, per non processare due volte la stessa operazione
 
@@ -789,9 +808,9 @@ if __name__ == '__main__':
     # print(df_scambi[df_scambi["coin"] =="BTC"].to_string())
 # print(isinstance(operazioni, list))
 # print(quotazioni['USDC-EUR']["2025-12-27"])
-
-    prova = [{'timestamp': pd.to_datetime('2025-04-21 15:52:33'), 'operation': 'Deposit', 'coin': 'USDC', 'change': 500, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv'},
+    scambi = load_scambi(BINANCE_BASE_DIR)
+    prova = [{'timestamp': pd.to_datetime('2024-09-29 12:56:00'), 'operation': 'BUY', 'coin': 'POL', 'change': 108.3, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv'},
              {'timestamp': pd.to_datetime('2025-04-21 18:55:00'), 'operation': 'Deposit', 'coin': 'USDC', 'change': 1000, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv'}]
     print(prova[0])
-    coin_data = process_all_binance_operations(prova, None, None, start_dt, end_dt, quotazioni)
+    coin_data = process_all_binance_operations(prova, scambi, None, start_dt, end_dt, quotazioni)
     print(coin_data)
