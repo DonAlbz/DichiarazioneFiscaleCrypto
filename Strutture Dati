@@ -1,0 +1,22 @@
+scambi.append({
+                            'timestamp': timestamp,
+                            'operation': 'BUY',
+                            'coin': executed_coin if executed_coin else base,  # BASE: da AGGIUNGERE
+                            'change': executed_val,  # Positivo
+                            'quote_coin': amount_coin if amount_coin else quote,  # QUOTE: da SOTTRARRE
+                            'quote_amount': amount_val,
+                            'fee': fee_val,
+                            'fee_coin': fee_coin,
+                            'source': 'scambi',
+                            'gia_elaborata': False
+               })
+
+assets.append({
+                            'timestamp': timestamp,
+                            'operation': operation,
+                            'coin': coin,
+                            'change': change,
+                            'remark': row.get('Remark', ''),
+                            'source': file,
+                            'gia_elaborata': False
+               })

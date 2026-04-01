@@ -503,7 +503,7 @@ def deposita_coin(c, coin_data, qty, timestamp, coin_a_pmc_zero):
 
         # caso in cui ho ricevuto un deposito del quale conosco il prezzo medio di carico
         # rate = get_price_at_timestamp(quotazioni['USDC-EUR'],pd.to_datetime(timestamp).normalize())
-        coin_data[c]['total_cost'] += qty * pmc_deposito if pmc_deposito > 0 else raiseExceptions
+        coin_data[c]['total_cost'] += qty * pmc_deposito# if pmc_deposito > 0 else raise Exception(f"Non trovato prezzo medio di carico di {c} al tempo {timestamp}")
         # print(f"Aggiunto operazione {op_type} per la coint {coin}")
         # print(f"Trovata quotazione USDC-EUR pari a {rate}")
         # print(f"Il costo totale coin passa a {coin_data[c]['total_cost']}")
@@ -521,8 +521,8 @@ def deposita_coin(c, coin_data, qty, timestamp, coin_a_pmc_zero):
             except ValueError:
                 raise Exception("Valore inserito non valido: inserire un numero o 'N'")
 
-        rate = quotazioni['EUR-USD'], pd.to_datetime(timestamp).normalize()
-        coin_data[c]['total_cost'] += qty * rate if rate > 0 else qty
+        rate = get_price_at_timestamp(quotazioni['USDC-EUR'], pd.to_datetime(timestamp).normalize())
+        coin_data[c]['total_cost'] += qty * rate #if rate > 0 else qty
     else:
         if coin_a_pmc_zero == False:
             print(f"rilevato deposito nella token coin {c} in data {timestamp}")
@@ -558,7 +558,19 @@ def elabora_buy(c, coin_data, qty, timestamp, assets, scambi):
         (scambi['change'] == qty) &
         (scambi['gia_elaborata'] == False)
         ]
-    print(risultati.to_string())
+    if len(risultati) > 1:
+        print(f"Trovate più scambi BUY nel periodo {timestamp}, con la coin {c} di importo {qty}:")
+        print(risultati.to_string())
+        raise Exception("Mi fermo perché non so quale scambio elaborare tra i tanti trovati")
+    if len(risultati) == 0:
+        print(f"Nessuno scambio BUY trovato nel periodo {timestamp}, con la coin {c} di importo {qty}:")
+        raise Exception("Mi fermo perché non ho trovato uno scambio al quale associare l'operazone")
+
+    #incremento quantità
+    coin_venduta = risultati[0]['']
+    coin_data[c]['quantity'] += qty
+
+
 
 
 ###################################
@@ -576,10 +588,10 @@ def process_all_binance_operations(asset, scambi, initial_portfolio, fiscal_star
     print("ELABORAZIONE OPERAZIONI")
     print("=" * 80 + "\n")
     risposta = input("Contabilizzare il prezzo medio di carico dei soli token crypto al valore di zero? (Y/n):  ")
-    while not (risposta == 'Y' or risposta == 'y' or risposta == 'n' or risposta == 'N'):
+    while not (risposta == '' or risposta == 'Y' or risposta == 'y' or risposta == 'n' or risposta == 'N'):
         if risposta == "n" or risposta == "N":
             coin_a_pmc_zero = False
-        elif risposta == "y" or risposta == "Y":
+        elif risposta == "y" or risposta == "Y" or risposta == "":
             coin_a_pmc_zero = True
         else:
             risposta = input ("Valore inserito non accettato, inserire Y o n:  ")
@@ -594,7 +606,7 @@ def process_all_binance_operations(asset, scambi, initial_portfolio, fiscal_star
     deposits_coinbase = []  # 21-23 aprile 2021
     deposits_other = []  # altri depositi
 
-    coin_data = defaultdict(lambda: {'quantity': 0, 'total_cost': 0})
+    coin_data = defaultdict(lambda: {'quantity': 0, 'total_cost': 0, 'Prezzo_Medio_Di_Carico': 0})
 
     # IMPORTANTE: Inizializza con portfolio Coinbase
     # Questi asset vengono poi trasferiti su Binance tramite depositi 21-23 aprile 2021
