@@ -20,3 +20,61 @@ assets.append({
                             'source': file,
                             'gia_elaborata': False
                })
+
+ coin_data = defaultdict(lambda:{
+                                'quantity': 0,
+                                'total_cost': 0,
+                                'Prezzo_Medio_Di_Carico': 0
+                                 })
+
+Caso d'uso per il calcolo del prezzo medio di carico (consultato con ChatGPT):
+immaginiamoci di avere 1000 USDT con prezzo medio di carico di 1.15, di avere 100 POL al prezzo medio di carico di 2, e di acquistare 108.3 POL pagando 45.07446 USDT.
+Mostrami i passaggi che devo fare per calcolare il nuovo prezzo medio di carico di POL.
+
+Perfetto, facciamolo passo per passo in modo fiscale corretto (Italia) 👍
+
+📊 Dati iniziali
+USDT:
+Quantità: 1000
+PMC: 1.15 €
+POL:
+Quantità: 100
+PMC: 2 €
+Operazione:
+Acquisto: 108.3 POL
+Costo: 45.07446 USDT
+🔹 1. Calcolo del costo in euro degli USDT usati
+
+Gli USDT hanno PMC 1.15 €, quindi:
+
+costo_euro = 45.07446 * 1.15
+
+👉
+
+costo_euro ≈ 51.835629 €
+🔹 2. Calcolo del costo totale precedente di POL
+costo_precedente = 100 * 2
+
+👉
+
+costo_precedente = 200 €
+🔹 3. Nuovo costo totale di POL
+nuovo_costo_totale = 200 + 51.835629
+
+👉
+
+nuovo_costo_totale ≈ 251.835629 €
+🔹 4. Nuova quantità totale di POL
+nuova_quantita = 100 + 108.3
+
+👉
+
+nuova_quantita = 208.3
+🔹 5. Nuovo prezzo medio di carico (PMC)
+pmc = nuovo_costo_totale / nuova_quantita
+
+👉
+
+PMC ≈ 1.209 €
+✅ RISULTATO FINALE
+Nuovo PMC POL ≈ 1.209 €
