@@ -197,7 +197,7 @@ def load_asset(start_ts, end_ts, asset_dir = BINANCE_BASE_DIR + "/asset/"):
             for op, count in sorted_ops[:15]:
                 print(f"      {op:<50} {count:>5}x")
         print()
-        return operations
+        return pd.DataFrame(operations).set_index('timestamp')
 
     except Exception as e:
         print("!"*80)
@@ -601,7 +601,7 @@ def elabora_buy(c, coin_data, qty, timestamp, assets, scambi):
 ## ELABORAZIONE DELLE OPERAZIONI ##
 ###################################
 
-def process_all_binance_operations(asset, scambi, initial_portfolio, fiscal_start, fiscal_end, eurusd_quotes=None):
+def process_all_binance_operations(assets, scambi, initial_portfolio, fiscal_start, fiscal_end, eurusd_quotes=None):
     """
     Elabora operazioni con valorizzazione EUR corretta per USDC/USDT
     eurusd_quotes: dict {timestamp: rate} per conversione USD→EUR
@@ -641,12 +641,16 @@ def process_all_binance_operations(asset, scambi, initial_portfolio, fiscal_star
     gains_2025 = []
     rewards_2025 = []
 
-    asset.sort(key=lambda x: (x['timestamp'], x['change']))  # Negative first, then positive
+    #ordinavo assets quando era una lista di dizionari
+    #assets.sort(key=lambda x: (x['timestamp'], x['change']))  # Negative first, then positive
+
+    #ordinamento assets come Pandas DataFrame
+    assets = assets.sort_values(by=['timestamp'], ascending=True)
 
     fiscal_start_dt = pd.to_datetime(fiscal_start)
     fiscal_end_dt = pd.to_datetime(fiscal_end)
 
-    for i, op in enumerate(asset):
+    for i, op in assets.iterrows():
         timestamp = op['timestamp']
         is_fiscal = fiscal_start_dt <= timestamp <= fiscal_end_dt
 
@@ -809,7 +813,7 @@ if __name__ == '__main__':
     start_dt = pd.to_datetime(START_DATE)
     end_dt = pd.to_datetime(END_DATE)
     assets = load_asset(start_dt, end_dt)
-    #assets è una lista [] dove ogni elemento è un dizionario di questo tipo:
+    #assets è un dataFrame che è originato da una lista [] dove ogni elemento è un dizionario di questo tipo:
     # {
     # 'timestamp': timestamp,
     # 'operation': operation,
@@ -820,24 +824,23 @@ if __name__ == '__main__':
     # 'gia_elaborata': False
     # }
     # Quando una coin viene processata, gia_elaborata diventa True
-    if assets:
-        # Converto la lista di dizionari in un DataFrame
-        df_ops = pd.DataFrame(assets)
 
-        # Controllo se le prime 10 operazioni corrispondono
-        # print("Stampo prime 10 operazioni")
-        # print(df_ops[['timestamp', 'operation', 'change', 'remark', 'gia_elaborata']].head(10).to_string(index=False))
-        # print(len(df_ops))
-        #
-        # # Filtro per BNB
-        # bnb_ops = df_ops[df_ops['coin'] == 'BNB']
-        #
-        # print("\n--- Le prime 10 operazioni BNB ---")
-        # print(bnb_ops[['timestamp', 'operation', 'change', 'remark']].head(10).to_string(index=False))
-        #
-        # # Calcolo il bilancio totale netto di BNB
-        # bilancio_totale = bnb_ops['change'].sum()
-        # print(f"\nBilancio finale BNB nel periodo: {bilancio_totale:.8f}")
+
+
+    # Controllo se le prime 10 operazioni corrispondono
+    # print("Stampo prime 10 operazioni")
+    # print(assets[['timestamp', 'operation', 'change', 'remark', 'gia_elaborata']].head(10).to_string(index=False))
+    # print(len(assets))
+    #
+    # # Filtro per BNB
+    # bnb_ops = assets[assets['coin'] == 'BNB']
+    #
+    # print("\n--- Le prime 10 operazioni BNB ---")
+    # print(bnb_ops[['timestamp', 'operation', 'change', 'remark']].head(10).to_string(index=False))
+    #
+    # # Calcolo il bilancio totale netto di BNB
+    # bilancio_totale = bnb_ops['change'].sum()
+    # print(f"\nBilancio finale BNB nel periodo: {bilancio_totale:.8f}")
     # scambi = load_scambi(BINANCE_BASE_DIR)
     # df_scambi = pd.DataFrame(scambi)
     # print(df_scambi[df_scambi["coin"] =="BTC"].to_string())
@@ -849,8 +852,8 @@ if __name__ == '__main__':
               {'timestamp': pd.to_datetime('2021-09-29 12:56:00'), 'operation': 'Deposit', 'coin': 'POL', 'change': 100, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv'},
              {'timestamp': pd.to_datetime('2024-09-29 12:56:00'), 'operation': 'BUY', 'coin': 'POL', 'change': 108.3, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv'},
              {'timestamp': pd.to_datetime('2025-04-21 18:55:00'), 'operation': 'Deposit', 'coin': 'USDC', 'change': 1000, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv'}]
-    print(prova[0])
-    coin_data = process_all_binance_operations(prova, scambi, None, start_dt, end_dt, quotazioni)
+    df_prova = pd.DataFrame(prova)
+    coin_data = process_all_binance_operations(df_prova, scambi, None, start_dt, end_dt, quotazioni)
     print(coin_data)
     print("stampo scambi:")
 
