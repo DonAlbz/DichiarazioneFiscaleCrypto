@@ -70,6 +70,7 @@ FISCAL_YEAR_END = "2025-12-31 23:59:59"
 # Stablecoin USD da valorizzare con EUR/USD
 USD_STABLECOINS = ['USDC', 'USDT', 'BUSD', 'FDUSD']
 quotazioni = None #{[]}
+pd.set_option('display.float_format', lambda x: f'{x:.8f}')
 
 def load_asset(start_ts, end_ts, asset_dir = BINANCE_BASE_DIR + "/asset/"):
     """
@@ -103,7 +104,7 @@ def load_asset(start_ts, end_ts, asset_dir = BINANCE_BASE_DIR + "/asset/"):
         all_assets = {}
 
 
-        df = pd.read_csv(file)
+        df = pd.read_csv(file, float_precision='round_trip')
 
         # Skippa la seconda riga se contiene i ticker ripetuti
         # Identifica se la prima riga di dati contiene il ticker
@@ -172,7 +173,7 @@ def load_asset(start_ts, end_ts, asset_dir = BINANCE_BASE_DIR + "/asset/"):
             if not coin or pd.isna(coin):
                 continue
 
-            change = float(row['Change'])
+            change = row['Change']
             operation = row['Operation']
 
            # Aggiungo l'operazione
@@ -379,7 +380,7 @@ def load_scambi(base_dir):
 
     for file in files:
         try:
-            df = pd.read_csv(file)
+            df = pd.read_csv(file, float_precision='round_trip')
             file_ops = 0
 
             # DEBUG: Mostra prime righe
@@ -547,34 +548,35 @@ def preleva_coin(c, coin_data,qty, timestamp):
     coin_data[c]['quantity'] -= qty
 
     # i è la posizione della coin c dentro assets
-def elabora_buy(c, coin_data, qty, timestamp, assets, scambi, i):
-    # TODO cambiare il metodo in elabora_asset, cercare a quale scambio corrisponde, se BUY o SELL e
-    # discriminare il funzionamento in base al tipo di scambio
+def elabora_buy(scambio, coin_data, timestamp, assets, i):
+    # # discriminare il funzionamento in base al tipo di scambio
     start = timestamp - timedelta(minutes=10)
     end = timestamp + timedelta(minutes=10)
-
-    # cerca in scambi lo scambio BUY corrispondente
-    risultati = scambi[
-        (scambi['operation'] == ['BUY']) &
-        (scambi['coin'] == c) &
-        (scambi['timestamp'].between(start, end)) &
-        (scambi['change'] == qty) &
-        (scambi['gia_elaborata'] == False)
-    ]
-    if len(risultati) > 1:
-        print(f"Trovate più scambi BUY nel periodo {timestamp}, con la coin {c} di importo {qty}:")
-        print(risultati.to_string())
-        raise Exception("Mi fermo perché non so quale scambio elaborare tra i tanti trovati")
-    if len(risultati) == 0:
-        print(f"Nessuno scambio BUY trovato nel periodo {timestamp}, con la coin {c} di importo {qty}:")
-        raise Exception("Mi fermo perché non ho trovato uno scambio al quale associare l'operazione")
+    c = scambio["coin"]
+    qty = scambio["change"]
+    #
+    # # cerca in scambi lo scambio BUY corrispondente
+    # risultati = scambi[
+    #     (scambi['operation'] == ['BUY']) &
+    #     (scambi['coin'] == c) &
+    #     (scambi['timestamp'].between(start, end)) &
+    #     (scambi['change'] == qty) &
+    #     (scambi['gia_elaborata'] == False)
+    # ]
+    # if len(risultati) > 1:
+    #     print(f"Trovate più scambi BUY nel periodo {timestamp}, con la coin {c} di importo {qty}:")
+    #     print(risultati.to_string())
+    #     raise Exception("Mi fermo perché non so quale scambio elaborare tra i tanti trovati")
+    # if len(risultati) == 0:
+    #     print(f"Nessuno scambio BUY trovato nel periodo {timestamp}, con la coin {c} di importo {qty}:")
+    #     raise Exception("Mi fermo perché non ho trovato uno scambio al quale associare l'operazione")
 
 
     # seleziono la coin venduta
-    coin_venduta = risultati.iloc[0]['quote_coin']
+    coin_venduta = scambio['quote_coin']
 
     # calcolo la quantità di coin venduta da sottrarre
-    qty_coin_venduta = float(risultati.iloc[0]['quote_amount'])
+    qty_coin_venduta = scambio['quote_amount']
 
     # decremento quantità coin venduta
     coin_data[coin_venduta]['quantity'] -= qty_coin_venduta
@@ -586,10 +588,10 @@ def elabora_buy(c, coin_data, qty, timestamp, assets, scambi, i):
     costo_coin_venduta = qty_coin_venduta * pmc_coin_venduta
 
     # verifico coin fee
-    fee_coin = risultati.iloc[0]['fee_coin']
+    fee_coin = scambio['fee_coin']
 
     # salvo quantità fee
-    qty_fee = risultati.iloc[0]['fee']
+    qty_fee = scambio['fee']
 
 
     # Se la fee è nella stessa coin della coin acquistata:
@@ -618,10 +620,13 @@ def elabora_buy(c, coin_data, qty, timestamp, assets, scambi, i):
 
     # calcolo il nuovo PMC della coin acquistata
     print(f'Sto calcolando il PMC di {c} acquistata in data {timestamp}')
-    coin_data[c]['Prezzo_Medio_Di_Carico'] = coin_data[c]['total_cost'] / coin_data[c]['quantity']
+    if c != "EUR":
+        coin_data[c]['Prezzo_Medio_Di_Carico'] = coin_data[c]['total_cost'] / coin_data[c]['quantity']
+    else:
+        coin_data[c]['Prezzo_Medio_Di_Carico'] = 1
 
     # setto lo scambio come già elaborato
-    scambi.at[risultati.index[0], 'gia_elaborata'] = True
+    scambi.loc[scambio.name, 'gia_elaborata'] = True
 
     # individuo la colonna del campo gia_elaborata (mi serve per settare gia elaborata la fee e la coin venduta)
     col_idx = assets.columns.get_loc('gia_elaborata')
@@ -664,12 +669,25 @@ def elabora_buy(c, coin_data, qty, timestamp, assets, scambi, i):
             break
 
     if not trovata:
-        print(f"Nessuno scambio SELL trovato nel periodo {timestamp}, con la coin {coin_venduta} di importo {qty_coin_venduta}:")
-        raise Exception("Mi fermo perché non ho trovato uno scambio al quale associare l'operazione")
+        # DEBUG: stampa i valori esatti per capire il mismatch
+        i_start, i_end = assets.index.slice_locs(start, end)
+        print(f"Cerco: coin={coin_venduta}, change={repr(-1 * qty_coin_venduta)}")
+        print(f"Righe nel range temporale:")
+        for pos in range(i_start, i_end):
+            row = assets.iloc[pos]
+            if row['coin'] == coin_venduta:
+                print(f"  operation={row['operation']}, change={repr(row['change'])}, "
+                      f"uguale={row['change'] == (-1 * qty_coin_venduta)}, "
+                      f"differenza={abs(row['change'] - (-1 * qty_coin_venduta))}")
+        raise Exception(...)
+    # if not trovata:
+    #     print(f"Nessuno scambio SELL trovato nel periodo {timestamp}, con la coin {coin_venduta} di importo {qty_coin_venduta}:")
+    #     raise Exception("Mi fermo perché non ho trovato uno scambio al quale associare l'operazione")
     return 0
 
 # i è la posizione della coin c dentro assets
-def elabora_sell(c, coin_data, qty, timestamp, assets, scambi, i):
+def elabora_sell(scambio, coin_data, timestamp, assets, i):
+    print("funzione ancora da elaborare")
     return 0
 ###################################
 ## ELABORAZIONE DELLE OPERAZIONI ##
@@ -724,161 +742,65 @@ def process_all_binance_operations(assets, scambi, initial_portfolio, fiscal_sta
     fiscal_start_dt = pd.to_datetime(fiscal_start)
     fiscal_end_dt = pd.to_datetime(fiscal_end)
 
-    for i, op in assets.iterrows():
-        timestamp = i  # l'indice È il timestamp
-        is_fiscal = fiscal_start_dt <= timestamp <= fiscal_end_dt
+    for pos, (i, op) in enumerate(assets.iterrows()):
+        timestamp = i
 
+        # legge il valore LIVE dal DataFrame con posizione intera (sempre scalare)
+        if assets.iloc[pos]['gia_elaborata']:
+            continue
+
+        is_fiscal = fiscal_start_dt <= timestamp <= fiscal_end_dt
         op_type = op['operation']
         coin = op['coin']
         change = op['change']
 
-        # SKIP operazioni che creano overlap ETH/BETH
-        # Queste operazioni sono registrate sia come ETH che come BETH ma rappresentano
-        # la stessa posizione/reward dalla stessa pool
         if (coin == 'ETH' or coin == 'BETH'):
             if any(keyword in op_type for keyword in ['Liquid', 'Liquidity', 'Swap Farming']):
-                continue  # Skippa completamente
+                continue
 
-        # DEBUG: Registra stato PRIMA dell'operazione
         qty_before = coin_data[coin]['quantity']
         cost_before = coin_data[coin]['total_cost']
 
-
-        # Logica speciale per DEPOSIT da Coinbase: SKIPPA completamente
-        # Questi depositi sono già inclusi nell'inizializzazione di coin_data
-        is_deposit_coinbase_transfer = (op_type == 'Deposit' and
-                                        pd.Timestamp('2021-04-21') <= timestamp <= pd.Timestamp(
-                    '2021-04-23 23:59:59'))
-
-        # if op_type == 'Deposit' and is_deposit_coinbase_transfer:
-        #     # SKIPPA: asset già in coin_data da initial_portfolio
-        #     # Non aggiungere quantità né costo
-        #     return
         if op_type == 'Deposit':
-            deposita_coin(coin, coin_data,change, timestamp, coin_a_pmc_zero)
+            deposita_coin(coin, coin_data, change, timestamp, coin_a_pmc_zero)
         elif op_type == 'Withdraw':
-           preleva_coin(coin, coin_data,change, timestamp)
-        elif op_type in ['Buy', 'Transaction Buy']:
+            preleva_coin(coin, coin_data, change, timestamp)
+        elif op_type in ['Buy', 'Sell', 'Transaction Buy', 'Transaction Spend']:
+            start = timestamp - timedelta(minutes=2)
+            end = timestamp + timedelta(minutes=2)
 
-            elabora_buy(coin, coin_data, change, timestamp, assets, scambi, i)
-        #TODO implementare BUY e SELL incrociando i dati con scambi, sfruttando il campo
-        #gia_elaborata di assets, per non processare due volte la stessa operazione
+            risultati = scambi[
+                (scambi['timestamp'].between(start, end)) &
+                (scambi['gia_elaborata'] == False) &
+                (((scambi['coin'] == coin) &
+                  (abs(scambi['change']) == abs(change))) |
+                 ((scambi['quote_coin'] == coin) &
+                  (abs(scambi['quote_amount']) == abs(change))))
+                ]
+
+            if len(risultati) == 0:
+                print(f"Nessuno scambio trovato nel periodo {timestamp}, con la coin {coin} di importo {change}:")
+                raise Exception("Mi fermo perché non ho trovato uno scambio al quale associare l'operazione")
+            if len(risultati) > 1:
+                print(f"Trovate più scambi nel periodo {timestamp}, con la coin {coin} di importo {change}:")
+                print(risultati.to_string())
 
 
-        # Al termine dell'elaborazione dell'operazione:
-        #op['gia_elaborata'] = True
-        # # Helper: aggiunge quantità E costo EUR a una coin
-        # def add_coin(c, qty, cost_eur_explicit=None):
-        #     """Aggiunge qty a coin c, calcolando il costo EUR corretto"""
-        #     if qty <= 0:
-        #         coin_data[c]['quantity'] += qty
-        #         return
-        #
-        #     # # Logica speciale per DEPOSIT da Coinbase: SKIPPA completamente
-        #     # # Questi depositi sono già inclusi nell'inizializzazione di coin_data
-        #     # is_deposit_coinbase_transfer = (op_type == 'Deposit' and
-        #     #                                 pd.Timestamp('2021-04-21') <= timestamp <= pd.Timestamp(
-        #     #             '2021-04-23 23:59:59'))
-        #     #
-        #     # # if op_type == 'Deposit' and is_deposit_coinbase_transfer:
-        #     # #     # SKIPPA: asset già in coin_data da initial_portfolio
-        #     # #     # Non aggiungere quantità né costo
-        #     # #     return
-        #
-        #
-        #     #coin_data[c]['quantity'] += qty
-        #
-        #     if op_type == 'Deposit':
-        #         # Altri depositi: costo = 0 per crypto (acquisite gratuitamente o da fonti esterne)
-        #         # Eccezioni: EUR = 1, USD stablecoin = tasso storico
-        #         if c == 'EUR':
-        #             coin_data[c]['total_cost'] += qty
-        #         elif c =="USDC" and quotazioni is not None:
-        #             print(f"rilevato deposito USDC in data {timestamp}")
-        #             pmc_deposito = input("Inserisci prezzo medio di carico in EUR, oppure N se non disponibile: ")
-        #
-        #             if pmc_deposito.upper() == 'N':
-        #                 pmc_deposito = 0
-        #             else:
-        #                 try:
-        #                     pmc_deposito = float(pmc_deposito)
-        #                 except ValueError:
-        #                     raise Exception("Valore inserito non valido: inserire un numero o 'N'")
-        #
-        #             # caso in cui ho ricevuto un deposito del quale conosco il prezzo medio di carico
-        #             #rate = get_price_at_timestamp(quotazioni['USDC-EUR'],pd.to_datetime(timestamp).normalize())
-        #             coin_data[c]['total_cost'] += qty * pmc_deposito if pmc_deposito > 0 else raiseExceptions
-        #             # print(f"Aggiunto operazione {op_type} per la coint {coin}")
-        #             # print(f"Trovata quotazione USDC-EUR pari a {rate}")
-        #             # print(f"Il costo totale coin passa a {coin_data[c]['total_cost']}")
-        #             # print(f"Il prezzo medio di carico è: {coin_data[c]['total_cost'] / coin_data[c]['quantity']}")
-        #
-        #         elif c in USD_STABLECOINS and quotazioni is not None:
-        #             print(f"rilevato deposito nella stablecoin {c} in data {timestamp}")
-        #             pmc_deposito = input("Inserisci prezzo medio di carico, oppure N se non disponibile: ")
-        #
-        #             if pmc_deposito.upper() == 'N':
-        #                 pmc_deposito = 0
-        #             else:
-        #                 try:
-        #                     pmc_deposito = float(pmc_deposito)
-        #                 except ValueError:
-        #                     raise Exception("Valore inserito non valido: inserire un numero o 'N'")
-        #
-        #             rate = quotazioni['EUR-USD'],pd.to_datetime(timestamp).normalize()
-        #             coin_data[c]['total_cost'] += qty * rate if rate > 0 else qty
-        #         else: # caso di deposito di coin non EUR e non stablecoin
-        #             if coin_a_pmc_zero == False:
-        #                 print(f"rilevato deposito nella token coin {c} in data {timestamp}")
-        #                 pmc_deposito = input("Inserisci prezzo medio di carico in EUR, oppure N se non disponibile: ")
-        #
-        #                 if pmc_deposito.upper() == 'N':
-        #                     pmc_deposito = 0
-        #                 else:
-        #                     try:
-        #                         pmc_deposito = float(pmc_deposito)
-        #                     except ValueError:
-        #                         raise Exception("Valore inserito non valido: inserire un numero o 'N'")
-        #
-        #                 #rate = quotazioni['EUR-USD'], pd.to_datetime(timestamp).normalize() #caso valore in USD
-        #                 coin_data[c]['total_cost'] += qty * pmc_deposito if pmc_deposito > 0 else raiseExceptions
-        #
-        # #     # Per operazioni NON-deposit (BUY, REWARD, etc): logica normale
-        #
-        #     if c == 'EUR':
-        #         # EUR: costo sempre 1:1 (è la valuta di riferimento)
-        #         coin_data[c]['total_cost'] += qty
-        #     elif c in USD_STABLECOINS and eurusd_quotes is not None:
-        #         # USD stablecoin: costo EUR = qty / tasso EUR/USD storico
-        #
-        #         rate = quotazioni(timestamp, eurusd_quotes)
-        #         coin_data[c]['total_cost'] += qty / rate if rate > 0 else qty
-        #     elif cost_eur_explicit is not None:
-        #         # Costo EUR esplicito passato dal chiamante
-        #         coin_data[c]['total_cost'] += cost_eur_explicit
-        #     # else: costo = 0 (crypto senza quotazioni, ricevute gratuitamente)
-        #
-        # def remove_coin(c, qty):
-        #     """Rimuove qty da coin c usando prezzo medio. Ritorna (costo_rimosso, avg)."""
-        #     qty = abs(qty)
-        #
-        #     if c == 'EUR':
-        #         # EUR: avg sempre 1
-        #         avg = 1.0
-        #         cost_removed = qty
-        #     elif coin_data[c]['quantity'] > 0:
-        #         avg = coin_data[c]['total_cost'] / coin_data[c]['quantity']
-        #         cost_removed = qty * avg
-        #     else:
-        #         avg = 0.0
-        #         cost_removed = 0.0
-        #
-        #     coin_data[c]['quantity'] -= qty
-        #     coin_data[c]['total_cost'] -= cost_removed
-        #     return cost_removed, avg
-        #
-        # add_coin(coin, change)
+            scambio = risultati.iloc[0]
+
+            if scambio['operation'] == 'BUY':
+                # l'asset corrente è la coin ACQUISTATA → elabora_buy
+                elabora_buy(scambio, coin_data, timestamp, assets, i)
+
+            elif scambio['operation'] == 'SELL':
+                # l'asset corrente è la coin VENDUTA → elabora_sell
+                elabora_sell(scambio, coin_data, timestamp, assets, i)
+
+            else:
+                raise Exception(f"Trovato uno scambio che non è nè BUY, nè SELL, è {scambio['operation']}")
+
     return coin_data
+
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
@@ -888,6 +810,7 @@ if __name__ == '__main__':
     start_dt = pd.to_datetime(START_DATE)
     end_dt = pd.to_datetime(END_DATE)
     assets = load_asset(start_dt, end_dt)
+
     print(assets.columns.tolist())
     #assets è un dataFrame che è originato da una lista [] dove ogni elemento è un dizionario di questo tipo:
     # {
@@ -924,6 +847,8 @@ if __name__ == '__main__':
 # print(quotazioni['USDC-EUR']["2025-12-27"])
     scambi = load_scambi(BINANCE_BASE_DIR)
     scambi = pd.DataFrame(scambi)
+    # dopo il caricamento, cerca quella riga specifica
+
     prova = [ {'timestamp': pd.to_datetime('2021-04-21 18:55:00'), 'operation': 'Deposit', 'coin': 'USDT', 'change': 1000, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv', 'gia_elaborata': False},
               {'timestamp': pd.to_datetime('2021-09-29 12:56:00'), 'operation': 'Deposit', 'coin': 'POL', 'change': 100, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv', 'gia_elaborata': False},
               #caso reale acquisto POL usando USDT pagando fee in POL
@@ -937,7 +862,7 @@ if __name__ == '__main__':
              {'timestamp': pd.to_datetime('2025-04-21 18:55:00'), 'operation': 'Deposit', 'coin': 'USDC', 'change': 1000, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv', 'gia_elaborata': False}]
     df_prova = pd.DataFrame(prova).set_index('timestamp').sort_index()
 #    coin_data = process_all_binance_operations(df_prova, scambi, None, start_dt, end_dt, quotazioni)
-    coin_data = process_all_binance_operations(assets, scambi, None, start_dt, end_dt, quotazioni)
+    coin_data = process_all_binance_operations(assets, scambi, None, FISCAL_YEAR_START, FISCAL_YEAR_END, quotazioni)
 
     print(coin_data)
 
