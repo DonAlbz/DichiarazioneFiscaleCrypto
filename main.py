@@ -615,6 +615,9 @@ def elabora_buy(scambio, coin_data, timestamp, assets, i):
         # modifico quantità coin fee
         coin_data[fee_coin]['quantity'] -= qty_fee
 
+    # aggiorno il costo totale della coin venduta (il suo PMC rimane uguale per proprietà matematica)
+    coin_data[coin_venduta]['total_cost'] -= costo_coin_venduta
+
     # assegno il nuovo costo totale alla coin acquistata
     coin_data[c]['total_cost'] += costo_coin_venduta
 
@@ -687,7 +690,84 @@ def elabora_buy(scambio, coin_data, timestamp, assets, i):
 
 # i è la posizione della coin c dentro assets
 def elabora_sell(scambio, coin_data, timestamp, assets, i):
-    print("funzione ancora da elaborare")
+    start = timestamp - timedelta(minutes=10)
+    end = timestamp + timedelta(minutes=10)
+
+    c_venduta = scambio['coin']
+    qty_venduta = abs(scambio['change'])
+    coin_ricevuta = scambio['quote_coin']
+    qty_ricevuta = scambio['quote_amount']
+    fee_coin = scambio['fee_coin']
+    qty_fee = scambio['fee']
+
+    # PMC della coin venduta — rimane invariato
+    pmc_coin_venduta = coin_data[c_venduta]['Prezzo_Medio_Di_Carico']
+    costo_coin_venduta = qty_venduta * pmc_coin_venduta
+
+    # decremento quantità e costo della coin venduta
+    coin_data[c_venduta]['quantity'] -= qty_venduta
+    coin_data[c_venduta]['total_cost'] -= costo_coin_venduta
+
+    # gestione coin ricevuta e fee
+    if fee_coin == coin_ricevuta:
+        qty_netta_ricevuta = qty_ricevuta - qty_fee
+        coin_data[coin_ricevuta]['quantity'] += qty_netta_ricevuta
+        coin_data[coin_ricevuta]['total_cost'] += costo_coin_venduta
+    else:
+        coin_data[coin_ricevuta]['quantity'] += qty_ricevuta
+        coin_data[coin_ricevuta]['total_cost'] += costo_coin_venduta
+        valore_fiscale_fee = qty_fee * coin_data[fee_coin]['Prezzo_Medio_Di_Carico']
+        coin_data[fee_coin]['quantity'] -= qty_fee
+        coin_data[fee_coin]['total_cost'] -= valore_fiscale_fee
+
+    # aggiorno PMC coin ricevuta
+    if coin_ricevuta == 'EUR':
+        coin_data[coin_ricevuta]['Prezzo_Medio_Di_Carico'] = 1
+    elif coin_data[coin_ricevuta]['quantity'] > 0:
+        coin_data[coin_ricevuta]['Prezzo_Medio_Di_Carico'] = (
+            coin_data[coin_ricevuta]['total_cost'] / coin_data[coin_ricevuta]['quantity']
+        )
+
+    print(f'Elaborata vendita {c_venduta} → {coin_ricevuta} in data {timestamp}')
+
+    # --- setto lo SCAMBIO come già elaborato ---
+    scambi.loc[scambio.name, 'gia_elaborata'] = True
+
+    col_idx = assets.columns.get_loc('gia_elaborata')
+
+    # --- setto la coin VENDUTA in assets come già elaborata ---
+    i_start, i_end = assets.index.slice_locs(timestamp, timestamp)
+    for pos in range(i_start, i_end):
+        row = assets.iloc[pos]
+        if (row['operation'] in ['Sell', 'Transaction Spend'] and
+                row['coin'] == c_venduta and
+                row['change'] == -qty_venduta and
+                not row['gia_elaborata']):
+            assets.iloc[pos, col_idx] = True
+            break
+
+    # --- setto la coin RICEVUTA in assets come già elaborata ---
+    i_start, i_end = assets.index.slice_locs(start, end)
+    for pos in range(i_start, i_end):
+        row = assets.iloc[pos]
+        if (row['operation'] in ['Buy', 'Transaction Revenue'] and
+                row['coin'] == coin_ricevuta and
+                row['change'] == qty_ricevuta and
+                not row['gia_elaborata']):
+            assets.iloc[pos, col_idx] = True
+            break
+
+    # --- setto la FEE in assets come già elaborata ---
+    i_start, i_end = assets.index.slice_locs(start, end)
+    for pos in range(i_start, i_end):
+        row = assets.iloc[pos]
+        if (row['operation'] in ['Fee', 'Transaction Fee'] and
+                row['coin'] == fee_coin and
+                row['change'] == -qty_fee and
+                not row['gia_elaborata']):
+            assets.iloc[pos, col_idx] = True
+            break
+
     return 0
 ###################################
 ## ELABORAZIONE DELLE OPERAZIONI ##
@@ -869,5 +949,5 @@ if __name__ == '__main__':
     print("stampo scambi:")
     print(scambi[scambi["coin"] =="POL"].to_string())
 
-    print("stampo assets:")
-    print(df_prova)
+    # print("stampo assets:")
+    # print(df_prova)
