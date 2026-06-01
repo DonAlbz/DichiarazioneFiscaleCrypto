@@ -69,8 +69,17 @@ FISCAL_YEAR_START = "2025-01-01"
 FISCAL_YEAR_END = "2025-12-31 23:59:59"
 # Stablecoin USD da valorizzare con EUR/USD
 USD_STABLECOINS = ['USDC', 'USDT', 'BUSD', 'FDUSD']
+DEBUG_COINS = {'ETH', 'BETH'}
 quotazioni = None #{[]}
 pd.set_option('display.float_format', lambda x: f'{x:.8f}')
+
+
+def log_movimento(coin, coin_data, operazione, timestamp):
+    if coin in DEBUG_COINS:
+        print(f"  [DEBUG {coin}] {timestamp} | {operazione:<40} | "
+              f"qty={coin_data[coin]['quantity']:.8f} | "
+              f"cost={coin_data[coin]['total_cost']:.8f} | "
+              f"PMC={coin_data[coin]['Prezzo_Medio_Di_Carico']:.8f}")
 
 def load_asset(start_ts, end_ts, asset_dir = BINANCE_BASE_DIR + "/asset/"):
     """
@@ -109,9 +118,9 @@ def load_asset(start_ts, end_ts, asset_dir = BINANCE_BASE_DIR + "/asset/"):
         # Skippa la seconda riga se contiene i ticker ripetuti
         # Identifica se la prima riga di dati contiene il ticker
         # non dovrebbe servire per gli asset, ma meglio controllare
-        if len(df) > 0 and isinstance(df.iloc[0]['UTC_Time'], str) and not df.iloc[0]['UTC_Time'].replace('-',
-                                                                                                  '').isdigit():
-            df = df.iloc[1:].reset_index(drop=True)  # droppo la seconda riga se ticker
+        # if len(df) > 0 and isinstance(df.iloc[0]['UTC_Time'], str) and not df.iloc[0]['UTC_Time'].replace('-',
+        #                                                                                           '').isdigit():
+        #     df = df.iloc[1:].reset_index(drop=True)  # droppo la seconda riga se ticker
 
         print(f"File: {os.path.basename(file)}")
         print(f"Righe totali: {len(df)}")
@@ -542,10 +551,13 @@ def deposita_coin(c, coin_data, qty, timestamp, coin_a_pmc_zero):
         coin_data[c]['total_cost'] += qty * pmc_deposito if pmc_deposito > 0 else raiseExceptions
     coin_data[c]['Prezzo_Medio_Di_Carico'] = coin_data[c]['total_cost'] / coin_data[c]['quantity']
     # coin_data[c]['gia_elaborata'] = True
+    log_movimento(c, coin_data, f"Deposit", timestamp)
 
 
 def preleva_coin(c, coin_data,qty, timestamp):
-    coin_data[c]['quantity'] -= qty
+    #nell'asset il prelievo ha già segno negativo
+    coin_data[c]['quantity'] += qty
+    log_movimento(c, coin_data, f"Withraw", timestamp)
 
     # i è la posizione della coin c dentro assets
 def elabora_buy(scambio, coin_data, timestamp, assets, i):
@@ -581,6 +593,9 @@ def elabora_buy(scambio, coin_data, timestamp, assets, i):
     # decremento quantità coin venduta
     coin_data[coin_venduta]['quantity'] -= qty_coin_venduta
 
+    if (coin_venduta == "ETH" or c == "BETH"):
+        print(f"{timestamp} tolti {qty_coin_venduta} ETH. ETH tot: {coin_data[coin_venduta]['quantity']}")
+
     # recupero il PMC della coin venduta
     pmc_coin_venduta = coin_data[coin_venduta]['Prezzo_Medio_Di_Carico']
 
@@ -599,12 +614,17 @@ def elabora_buy(scambio, coin_data, timestamp, assets, i):
 
         # incremento quantità coin acquistata
         coin_data[c]['quantity'] += qty - qty_fee
+        # if (c =="ETH" or c == "BETH"):
+        #     print(f"{timestamp} aggiunti {qty - qty_fee} ETH. ETH tot: {coin_data[c]['quantity']}")
+        log_movimento(c, coin_data, f"Buy", timestamp)
 
     else:
         #Se la fee è in una coin diversa dalla coin acquistata:
 
         # incremento quantità coin acquistata
         coin_data[c]['quantity'] += qty
+        # if (c =="ETH" or c == "BETH"):
+        #     print(f"{timestamp} aggiunti {qty} ETH. ETH tot: {coin_data[c]['quantity']}")
 
         #calcolo valore fiscale della coin venduta
         valore_fiscale_fee = qty_fee * coin_data[fee_coin]['Prezzo_Medio_Di_Carico']
@@ -622,7 +642,7 @@ def elabora_buy(scambio, coin_data, timestamp, assets, i):
     coin_data[c]['total_cost'] += costo_coin_venduta
 
     # calcolo il nuovo PMC della coin acquistata
-    print(f'Sto calcolando il PMC di {c} acquistata in data {timestamp}')
+    #print(f'Sto calcolando il PMC di {c} acquistata in data {timestamp}')
     if c != "EUR":
         coin_data[c]['Prezzo_Medio_Di_Carico'] = coin_data[c]['total_cost'] / coin_data[c]['quantity']
     else:
@@ -686,6 +706,9 @@ def elabora_buy(scambio, coin_data, timestamp, assets, i):
     # if not trovata:
     #     print(f"Nessuno scambio SELL trovato nel periodo {timestamp}, con la coin {coin_venduta} di importo {qty_coin_venduta}:")
     #     raise Exception("Mi fermo perché non ho trovato uno scambio al quale associare l'operazione")
+    log_movimento(c, coin_data, f"BUY compra {c}", timestamp)
+    log_movimento(coin_venduta, coin_data, f"BUY vende {coin_venduta}", timestamp)
+    log_movimento(fee_coin, coin_data, f"BUY fee {fee_coin}", timestamp)
     return 0
 
 # i è la posizione della coin c dentro assets
@@ -728,7 +751,7 @@ def elabora_sell(scambio, coin_data, timestamp, assets, i):
             coin_data[coin_ricevuta]['total_cost'] / coin_data[coin_ricevuta]['quantity']
         )
 
-    print(f'Elaborata vendita {c_venduta} → {coin_ricevuta} in data {timestamp}')
+    # print(f'Elaborata vendita {c_venduta} → {coin_ricevuta} in data {timestamp}')
 
     # --- setto lo SCAMBIO come già elaborato ---
     scambi.loc[scambio.name, 'gia_elaborata'] = True
@@ -767,7 +790,9 @@ def elabora_sell(scambio, coin_data, timestamp, assets, i):
                 not row['gia_elaborata']):
             assets.iloc[pos, col_idx] = True
             break
-
+    log_movimento(c_venduta, coin_data, f"SELL vende {c_venduta}", timestamp)
+    log_movimento(coin_ricevuta, coin_data, f"SELL riceve {coin_ricevuta}", timestamp)
+    log_movimento(fee_coin, coin_data, f"SELL fee {fee_coin}", timestamp)
     return 0
 ###################################
 ## ELABORAZIONE DELLE OPERAZIONI ##
@@ -784,13 +809,11 @@ def process_all_binance_operations(assets, scambi, initial_portfolio, fiscal_sta
     print("=" * 80 + "\n")
     risposta = input("Contabilizzare il prezzo medio di carico dei soli token crypto al valore di zero? (Y/n):  ")
     while not (risposta == '' or risposta == 'Y' or risposta == 'y' or risposta == 'n' or risposta == 'N'):
-        if risposta == "n" or risposta == "N":
-            coin_a_pmc_zero = False
-        elif risposta == "y" or risposta == "Y" or risposta == "":
-            coin_a_pmc_zero = True
-        else:
-            risposta = input ("Valore inserito non accettato, inserire Y o n:  ")
-
+          risposta = input ("Valore inserito non accettato, inserire Y o n:  ")
+    if risposta == "n" or risposta == "N":
+        coin_a_pmc_zero = False
+    elif risposta == "y" or risposta == "Y" or risposta == "":
+        coin_a_pmc_zero = True
 
 
 
@@ -873,12 +896,15 @@ def process_all_binance_operations(assets, scambi, initial_portfolio, fiscal_sta
                 elabora_buy(scambio, coin_data, timestamp, assets, i)
 
             elif scambio['operation'] == 'SELL':
+
                 # l'asset corrente è la coin VENDUTA → elabora_sell
                 elabora_sell(scambio, coin_data, timestamp, assets, i)
 
             else:
                 raise Exception(f"Trovato uno scambio che non è nè BUY, nè SELL, è {scambio['operation']}")
 
+
+    return coin_data
     return coin_data
 
 
