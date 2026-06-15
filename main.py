@@ -69,9 +69,10 @@ FISCAL_YEAR_START = "2025-01-01"
 FISCAL_YEAR_END = "2025-12-31 23:59:59"
 # Stablecoin USD da valorizzare con EUR/USD
 USD_STABLECOINS = ['USDC', 'USDT', 'BUSD', 'FDUSD']
-DEBUG_COINS = {'BTC','WBTC'}
+DEBUG_COINS = {}
 quotazioni = None #{[]}
 pd.set_option('display.float_format', lambda x: f'{x:.8f}')
+quadro_RT = []
 
 
 def log_movimento(coin, coin_data, operazione, timestamp):
@@ -559,7 +560,7 @@ def preleva_coin(c, coin_data,qty, timestamp):
     coin_data[c]['quantity'] += qty
     log_movimento(c, coin_data, f"Withraw", timestamp)
 
-def elabora_binance_convert(coin, change, timestamp, assets, coin_data):
+def elabora_binance_convert(coin, change, timestamp, assets, coin_data, quadro_RT, is_fiscal):
     col_idx = assets.columns.get_loc('gia_elaborata')
 
     # cerca la riga controparte nello stesso secondo
@@ -646,8 +647,36 @@ def elabora_binance_convert(coin, change, timestamp, assets, coin_data):
 
     # riga controparte
     assets.iloc[controparte_pos, col_idx] = True
+    # compilazione quadro_RT
+    if is_fiscal:
+        if coin_ricevuta == 'EUR':
+            corrispettivo_eur = qty_ricevuta
+        elif coin_ricevuta == 'USDC' and quotazioni is not None:
+            rate = get_price_at_timestamp(quotazioni['USDC-EUR'], pd.to_datetime(timestamp).normalize())
+            corrispettivo_eur = qty_ricevuta * rate
+        elif c_venduta == 'EUR':
+            corrispettivo_eur = qty_venduta
+        else:
+            corrispettivo_eur = None
 
-def elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type):
+        costo_fiscale = qty_venduta * pmc_venduta
+        plusvalenza = (corrispettivo_eur - costo_fiscale) if corrispettivo_eur is not None else None
+
+        quadro_RT.append({
+            'data': timestamp,
+            'operazione': 'Binance Convert',
+            'coin_ceduta': c_venduta,
+            'qty_ceduta': qty_venduta,
+            'pmc_coin_ceduta': pmc_venduta,
+            'costo_fiscale': costo_fiscale,
+            'coin_ricevuta': coin_ricevuta,
+            'qty_ricevuta': qty_ricevuta,
+            'corrispettivo_eur': corrispettivo_eur,
+            'plusvalenza': plusvalenza
+        })
+
+
+def elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type, quadro_RT, is_fiscal):
     # aumenta la quantità a costo zero — il PMC si abbassa automaticamente
     coin_data[coin]['quantity'] += change
 
@@ -672,10 +701,10 @@ def elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type):
             break
 
 # le reward le considero come airdrop
-def elabora_reward(coin, change, timestamp, coin_data, assets, op_type):
-    elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type)
+def elabora_reward(coin, change, timestamp, coin_data, assets, op_type, quadro_RT, is_fiscal):
+    elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type, quadro_RT, is_fiscal)
 
-def elabora_buy(scambio, coin_data, timestamp, assets, i):
+def elabora_buy(scambio, coin_data, timestamp, assets, i, quadro_RT, is_fiscal):
     # # discriminare il funzionamento in base al tipo di scambio
     start = timestamp - timedelta(minutes=10)
     end = timestamp + timedelta(minutes=10)
@@ -824,10 +853,38 @@ def elabora_buy(scambio, coin_data, timestamp, assets, i):
     log_movimento(c, coin_data, f"BUY compra {c}", timestamp)
     log_movimento(coin_venduta, coin_data, f"BUY vende {coin_venduta}", timestamp)
     log_movimento(fee_coin, coin_data, f"BUY fee {fee_coin}", timestamp)
+
+    # salva in quadro_RT se nell'anno fiscale e coin ottenuta è EUR o USDC
+    if is_fiscal:
+        # in un BUY stai cedendo coin_venduta per ricevere c
+        # il corrispettivo è il valore in EUR della coin ricevuta
+        if c == 'EUR':
+            corrispettivo_eur = qty - (qty_fee if fee_coin == c else 0)
+        elif c == 'USDC' and quotazioni is not None:
+            rate = get_price_at_timestamp(quotazioni['USDC-EUR'], pd.to_datetime(timestamp).normalize())
+            qty_netta = qty - qty_fee if fee_coin == c else qty
+            corrispettivo_eur = qty_netta * rate
+        else:
+            corrispettivo_eur = None
+
+        plusvalenza = (corrispettivo_eur - costo_coin_venduta) if corrispettivo_eur is not None else None
+
+        quadro_RT.append({
+            'data': timestamp,
+            'operazione': 'BUY',
+            'coin_ceduta': coin_venduta,
+            'qty_ceduta': qty_coin_venduta,
+            'pmc_coin_ceduta': pmc_coin_venduta,
+            'costo_fiscale': costo_coin_venduta,
+            'coin_ricevuta': c,
+            'qty_ricevuta': qty - (qty_fee if fee_coin == c else 0),
+            'corrispettivo_eur': corrispettivo_eur,
+            'plusvalenza': plusvalenza
+        })
     return 0
 
 # i è la posizione della coin c dentro assets
-def elabora_sell(scambio, coin_data, timestamp, assets, i):
+def elabora_sell(scambio, coin_data, timestamp, assets, i, quadro_RT, is_fiscal):
     start = timestamp - timedelta(minutes=10)
     end = timestamp + timedelta(minutes=10)
 
@@ -908,6 +965,35 @@ def elabora_sell(scambio, coin_data, timestamp, assets, i):
     log_movimento(c_venduta, coin_data, f"SELL vende {c_venduta}", timestamp)
     log_movimento(coin_ricevuta, coin_data, f"SELL riceve {coin_ricevuta}", timestamp)
     log_movimento(fee_coin, coin_data, f"SELL fee {fee_coin}", timestamp)
+
+    if is_fiscal and coin_ricevuta in ['EUR', 'USDC']:
+        # il corrispettivo è il valore in EUR della coin ricevuta
+        qty_netta = qty_ricevuta - qty_fee if fee_coin == coin_ricevuta else qty_ricevuta
+        if coin_ricevuta == 'EUR':
+            corrispettivo_eur = qty_netta if fee_coin == coin_ricevuta else qty_ricevuta
+        elif coin_ricevuta == 'USDC' and quotazioni is not None:
+            rate = get_price_at_timestamp(quotazioni['USDC-EUR'], pd.to_datetime(timestamp).normalize())
+            corrispettivo_eur = (qty_ricevuta - qty_fee if fee_coin == coin_ricevuta else qty_ricevuta) * rate
+        else:
+            # per altre coin, usa la quotazione EUR se disponibile
+            corrispettivo_eur = None  # da valorizzare se hai la quotazione
+
+        costo_fiscale = qty_venduta * pmc_coin_venduta
+        plusvalenza = (corrispettivo_eur - costo_fiscale) if corrispettivo_eur is not None else None
+
+        quadro_RT.append({
+            'data': timestamp,
+            'operazione': 'SELL',
+            'coin_ceduta': c_venduta,
+            'qty_ceduta': qty_venduta,
+            'pmc_coin_ceduta': pmc_coin_venduta,
+            'costo_fiscale': costo_fiscale,
+            'coin_ricevuta': coin_ricevuta,
+            'qty_ricevuta': qty_ricevuta,
+            'corrispettivo_eur': corrispettivo_eur,
+            'plusvalenza': plusvalenza
+        })
+
     return 0
 ###################################
 ## ELABORAZIONE DELLE OPERAZIONI ##
@@ -1008,26 +1094,26 @@ def process_all_binance_operations(assets, scambi, initial_portfolio, fiscal_sta
 
             if scambio['operation'] == 'BUY':
                 # l'asset corrente è la coin ACQUISTATA → elabora_buy
-                elabora_buy(scambio, coin_data, timestamp, assets, i)
+                elabora_buy(scambio, coin_data, timestamp, assets, i, quadro_RT, is_fiscal)
 
             elif scambio['operation'] == 'SELL':
 
                 # l'asset corrente è la coin VENDUTA → elabora_sell
-                elabora_sell(scambio, coin_data, timestamp, assets, i)
+                elabora_sell(scambio, coin_data, timestamp, assets, i, quadro_RT, is_fiscal)
 
             else:
                 raise Exception(f"Trovato uno scambio che non è nè BUY, nè SELL, è {scambio['operation']}")
         elif op_type == 'Binance Convert':
-            elabora_binance_convert(coin, change, timestamp, assets, coin_data)
+            elabora_binance_convert(coin, change, timestamp, assets, coin_data, quadro_RT, is_fiscal)
         elif op_type in ['Simple Earn Locked Rewards', 'Simple Earn Flexible Interest', 'Staking Rewards',
                          'ETH 2.0 Staking Rewards', 'Swap Farming Rewards', ]:
-            elabora_reward(coin, change, timestamp, coin_data, assets, op_type)
+            elabora_reward(coin, change, timestamp, coin_data, assets, op_type, quadro_RT, is_fiscal)
         elif op_type in ['HODLer Airdrops Distribution', 'Launchpool Airdrop - User Claim Distribution',
         'Launchpad Token Distribution', 'Launchpool Airdrop - System Distribution', 'Megadrop Rewards']:
-            elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type)
+            elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type, quadro_RT, is_fiscal)
 
 
-    return coin_data
+    return coin_data, quadro_RT
 
 
 # Press the green button in the gutter to run the script.
@@ -1090,7 +1176,8 @@ if __name__ == '__main__':
 #              {'timestamp': pd.to_datetime('2025-04-21 18:55:00'), 'operation': 'Deposit', 'coin': 'USDC', 'change': 1000, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv', 'gia_elaborata': False}]
 #     df_prova = pd.DataFrame(prova).set_index('timestamp').sort_index()
 # #    coin_data = process_all_binance_operations(df_prova, scambi, None, start_dt, end_dt, quotazioni)
-    coin_data = process_all_binance_operations(assets, scambi, None, FISCAL_YEAR_START, FISCAL_YEAR_END, quotazioni)
+    coin_data, quadro_RT = process_all_binance_operations(assets, scambi, None, FISCAL_YEAR_START, FISCAL_YEAR_END,
+                                                          quotazioni)
 
     print(coin_data)
 
