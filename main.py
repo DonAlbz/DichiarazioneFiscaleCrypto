@@ -69,7 +69,7 @@ FISCAL_YEAR_START = "2025-01-01"
 FISCAL_YEAR_END = "2025-12-31 23:59:59"
 # Stablecoin USD da valorizzare con EUR/USD
 USD_STABLECOINS = ['USDC', 'USDT', 'BUSD', 'FDUSD']
-DEBUG_COINS = {'ETH', 'BETH'}
+DEBUG_COINS = {'BTC','WBTC'}
 quotazioni = None #{[]}
 pd.set_option('display.float_format', lambda x: f'{x:.8f}')
 
@@ -559,7 +559,122 @@ def preleva_coin(c, coin_data,qty, timestamp):
     coin_data[c]['quantity'] += qty
     log_movimento(c, coin_data, f"Withraw", timestamp)
 
-    # i è la posizione della coin c dentro assets
+def elabora_binance_convert(coin, change, timestamp, assets, coin_data):
+    col_idx = assets.columns.get_loc('gia_elaborata')
+
+    # cerca la riga controparte nello stesso secondo
+    i_start, i_end = assets.index.slice_locs(timestamp, timestamp)
+    controparte = None
+    controparte_pos = None
+
+    for pos in range(i_start, i_end):
+        row = assets.iloc[pos]
+        if (row['operation'] == 'Binance Convert' and
+                row['coin'] != coin and
+                not row['gia_elaborata']):
+            controparte = row
+            controparte_pos = pos
+            break
+
+    # se non trovata, cerca ±1 secondo
+    if controparte is None:
+        for delta in [-1, 1]:
+            ts_cerca = timestamp + timedelta(seconds=delta)
+            i_start, i_end = assets.index.slice_locs(ts_cerca, ts_cerca)
+            for pos in range(i_start, i_end):
+                row = assets.iloc[pos]
+                if (row['operation'] == 'Binance Convert' and
+                        row['coin'] != coin and
+                        not row['gia_elaborata']):
+                    controparte = row
+                    controparte_pos = pos
+                    break
+            if controparte is not None:
+                break
+
+    if controparte is None:
+        raise Exception(f"Binance Convert: controparte non trovata per {coin} {change} al {timestamp}")
+
+    # determina quale è la coin venduta e quale quella ricevuta
+    if change < 0:
+        # questa riga è la coin venduta
+        c_venduta = coin
+        qty_venduta = abs(change)
+        coin_ricevuta = controparte['coin']
+        qty_ricevuta = abs(controparte['change'])
+    else:
+        # questa riga è la coin ricevuta, la controparte è quella venduta
+        c_venduta = controparte['coin']
+        qty_venduta = abs(controparte['change'])
+        coin_ricevuta = coin
+        qty_ricevuta = abs(change)
+
+    # calcolo fiscale: la coin ricevuta eredita il costo della coin venduta
+    pmc_venduta = coin_data[c_venduta]['Prezzo_Medio_Di_Carico']
+    costo_venduta = qty_venduta * pmc_venduta
+
+    # aggiorno coin venduta
+    coin_data[c_venduta]['quantity'] -= qty_venduta
+    coin_data[c_venduta]['total_cost'] -= costo_venduta
+    # PMC coin venduta rimane invariato per proprietà matematica
+
+    # aggiorno coin ricevuta
+    coin_data[coin_ricevuta]['quantity'] += qty_ricevuta
+    coin_data[coin_ricevuta]['total_cost'] += costo_venduta
+
+    if coin_ricevuta == 'EUR':
+        coin_data[coin_ricevuta]['Prezzo_Medio_Di_Carico'] = 1
+    elif coin_data[coin_ricevuta]['quantity'] > 0:
+        coin_data[coin_ricevuta]['Prezzo_Medio_Di_Carico'] = (
+                coin_data[coin_ricevuta]['total_cost'] / coin_data[coin_ricevuta]['quantity']
+        )
+
+    log_movimento(c_venduta, coin_data, f"Binance Convert vende {c_venduta}", timestamp)
+    log_movimento(coin_ricevuta, coin_data, f"Binance Convert riceve {coin_ricevuta}", timestamp)
+
+    # setto entrambe le righe come già elaborate
+    # riga corrente
+    i_start, i_end = assets.index.slice_locs(timestamp, timestamp)
+    for pos in range(i_start, i_end):
+        row = assets.iloc[pos]
+        if (row['operation'] == 'Binance Convert' and
+                row['coin'] == coin and
+                row['change'] == change and
+                not row['gia_elaborata']):
+            assets.iloc[pos, col_idx] = True
+            break
+
+    # riga controparte
+    assets.iloc[controparte_pos, col_idx] = True
+
+def elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type):
+    # aumenta la quantità a costo zero — il PMC si abbassa automaticamente
+    coin_data[coin]['quantity'] += change
+
+    # ricalcola PMC (si abbassa perché aggiungiamo quantità a costo zero)
+    if coin_data[coin]['quantity'] > 0:
+        coin_data[coin]['Prezzo_Medio_Di_Carico'] = (
+                coin_data[coin]['total_cost'] / coin_data[coin]['quantity']
+        )
+
+    log_movimento(coin, coin_data, f"{op_type}", timestamp)
+
+    # setto la riga come già elaborata
+    col_idx = assets.columns.get_loc('gia_elaborata')
+    i_start, i_end = assets.index.slice_locs(timestamp, timestamp)
+    for pos in range(i_start, i_end):
+        row = assets.iloc[pos]
+        if (row['operation'] == op_type and
+                row['coin'] == coin and
+                row['change'] == change and
+                not row['gia_elaborata']):
+            assets.iloc[pos, col_idx] = True
+            break
+
+# le reward le considero come airdrop
+def elabora_reward(coin, change, timestamp, coin_data, assets, op_type):
+    elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type)
+
 def elabora_buy(scambio, coin_data, timestamp, assets, i):
     # # discriminare il funzionamento in base al tipo di scambio
     start = timestamp - timedelta(minutes=10)
@@ -593,8 +708,8 @@ def elabora_buy(scambio, coin_data, timestamp, assets, i):
     # decremento quantità coin venduta
     coin_data[coin_venduta]['quantity'] -= qty_coin_venduta
 
-    if (coin_venduta == "ETH" or c == "BETH"):
-        print(f"{timestamp} tolti {qty_coin_venduta} ETH. ETH tot: {coin_data[coin_venduta]['quantity']}")
+    # if (coin_venduta == "ETH" or c == "BETH"):
+    #     print(f"{timestamp} tolti {qty_coin_venduta} ETH. ETH tot: {coin_data[coin_venduta]['quantity']}")
 
     # recupero il PMC della coin venduta
     pmc_coin_venduta = coin_data[coin_venduta]['Prezzo_Medio_Di_Carico']
@@ -616,7 +731,7 @@ def elabora_buy(scambio, coin_data, timestamp, assets, i):
         coin_data[c]['quantity'] += qty - qty_fee
         # if (c =="ETH" or c == "BETH"):
         #     print(f"{timestamp} aggiunti {qty - qty_fee} ETH. ETH tot: {coin_data[c]['quantity']}")
-        log_movimento(c, coin_data, f"Buy", timestamp)
+
 
     else:
         #Se la fee è in una coin diversa dalla coin acquistata:
@@ -670,7 +785,7 @@ def elabora_buy(scambio, coin_data, timestamp, assets, i):
     i_start, i_end = assets.index.slice_locs(timestamp, timestamp)
     for pos in range(i_start, i_end):
         row = assets.iloc[pos]
-        if (row['operation'] in ['Buy', 'Transaction Buy'] and
+        if (row['operation'] in ['Buy', 'Transaction Buy', 'Transaction Revenue'] and
                 row['coin'] == c and
                 row['change'] == qty and
                 not row['gia_elaborata']):
@@ -683,7 +798,7 @@ def elabora_buy(scambio, coin_data, timestamp, assets, i):
     trovata = False
     for pos in range(i_start, i_end):
         row = assets.iloc[pos]
-        if (row['operation'] in ['Sell', 'Transaction Spend'] and
+        if (row['operation'] in ['Sell', 'Transaction Spend', 'Transaction Sold'] and
                 row['coin'] == coin_venduta and
                 row['change'] == (-1 * qty_coin_venduta) and
                 not row['gia_elaborata']):
@@ -762,7 +877,7 @@ def elabora_sell(scambio, coin_data, timestamp, assets, i):
     i_start, i_end = assets.index.slice_locs(timestamp, timestamp)
     for pos in range(i_start, i_end):
         row = assets.iloc[pos]
-        if (row['operation'] in ['Sell', 'Transaction Spend'] and
+        if (row['operation'] in ['Sell', 'Transaction Spend', 'Transaction Sold'] and
                 row['coin'] == c_venduta and
                 row['change'] == -qty_venduta and
                 not row['gia_elaborata']):
@@ -773,7 +888,7 @@ def elabora_sell(scambio, coin_data, timestamp, assets, i):
     i_start, i_end = assets.index.slice_locs(start, end)
     for pos in range(i_start, i_end):
         row = assets.iloc[pos]
-        if (row['operation'] in ['Buy', 'Transaction Revenue'] and
+        if (row['operation'] in ['Buy', 'Transaction Buy' , 'Transaction Revenue'] and
                 row['coin'] == coin_ricevuta and
                 row['change'] == qty_ricevuta and
                 not row['gia_elaborata']):
@@ -868,7 +983,7 @@ def process_all_binance_operations(assets, scambi, initial_portfolio, fiscal_sta
             deposita_coin(coin, coin_data, change, timestamp, coin_a_pmc_zero)
         elif op_type == 'Withdraw':
             preleva_coin(coin, coin_data, change, timestamp)
-        elif op_type in ['Buy', 'Sell', 'Transaction Buy', 'Transaction Spend']:
+        elif op_type in ['Buy', 'Sell', 'Transaction Buy','Transaction Revenue', 'Transaction Spend', 'Transaction Sold']:
             start = timestamp - timedelta(minutes=2)
             end = timestamp + timedelta(minutes=2)
 
@@ -902,9 +1017,16 @@ def process_all_binance_operations(assets, scambi, initial_portfolio, fiscal_sta
 
             else:
                 raise Exception(f"Trovato uno scambio che non è nè BUY, nè SELL, è {scambio['operation']}")
+        elif op_type == 'Binance Convert':
+            elabora_binance_convert(coin, change, timestamp, assets, coin_data)
+        elif op_type in ['Simple Earn Locked Rewards', 'Simple Earn Flexible Interest', 'Staking Rewards',
+                         'ETH 2.0 Staking Rewards', 'Swap Farming Rewards', ]:
+            elabora_reward(coin, change, timestamp, coin_data, assets, op_type)
+        elif op_type in ['HODLer Airdrops Distribution', 'Launchpool Airdrop - User Claim Distribution',
+        'Launchpad Token Distribution', 'Launchpool Airdrop - System Distribution', 'Megadrop Rewards']:
+            elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type)
 
 
-    return coin_data
     return coin_data
 
 
@@ -955,19 +1077,19 @@ if __name__ == '__main__':
     scambi = pd.DataFrame(scambi)
     # dopo il caricamento, cerca quella riga specifica
 
-    prova = [ {'timestamp': pd.to_datetime('2021-04-21 18:55:00'), 'operation': 'Deposit', 'coin': 'USDT', 'change': 1000, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv', 'gia_elaborata': False},
-              {'timestamp': pd.to_datetime('2021-09-29 12:56:00'), 'operation': 'Deposit', 'coin': 'POL', 'change': 100, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv', 'gia_elaborata': False},
-              #caso reale acquisto POL usando USDT pagando fee in POL
-             {'timestamp': pd.to_datetime('2024-09-29 12:56:00'), 'operation': 'Buy', 'coin': 'POL', 'change': 108.3, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv', 'gia_elaborata': False},
-              {'timestamp': pd.to_datetime('2024-09-29 12:56:00'), 'operation': 'Fee', 'coin': 'POL', 'change': -0.1083, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv', 'gia_elaborata': False},
-              {'timestamp': pd.to_datetime('2024-09-29 12:56:00'), 'operation': 'Sell', 'coin': 'USDT', 'change': -45.07446, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv', 'gia_elaborata': False},
-              #caso reale acquisto ETH usando EUR e pagando fee in BNB
-              {'timestamp': pd.to_datetime('2022-04-14 20:50:01'), 'operation': 'Transaction Buy', 'coin': 'ETH','change': 0.0181, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv','gia_elaborata': False},
-              {'timestamp': pd.to_datetime('2022-04-14 20:50:01'), 'operation': 'Transaction Spend', 'coin': 'EUR','change': -50.41936, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv','gia_elaborata': False},
-              {'timestamp': pd.to_datetime('2022-04-14 20:50:01'), 'operation': 'Transaction Fee', 'coin': 'BNB','change': -0.00009858, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv','gia_elaborata': False},
-             {'timestamp': pd.to_datetime('2025-04-21 18:55:00'), 'operation': 'Deposit', 'coin': 'USDC', 'change': 1000, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv', 'gia_elaborata': False}]
-    df_prova = pd.DataFrame(prova).set_index('timestamp').sort_index()
-#    coin_data = process_all_binance_operations(df_prova, scambi, None, start_dt, end_dt, quotazioni)
+#     prova = [ {'timestamp': pd.to_datetime('2021-04-21 18:55:00'), 'operation': 'Deposit', 'coin': 'USDT', 'change': 1000, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv', 'gia_elaborata': False},
+#               {'timestamp': pd.to_datetime('2021-09-29 12:56:00'), 'operation': 'Deposit', 'coin': 'POL', 'change': 100, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv', 'gia_elaborata': False},
+#               #caso reale acquisto POL usando USDT pagando fee in POL
+#              {'timestamp': pd.to_datetime('2024-09-29 12:56:00'), 'operation': 'Buy', 'coin': 'POL', 'change': 108.3, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv', 'gia_elaborata': False},
+#               {'timestamp': pd.to_datetime('2024-09-29 12:56:00'), 'operation': 'Fee', 'coin': 'POL', 'change': -0.1083, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv', 'gia_elaborata': False},
+#               {'timestamp': pd.to_datetime('2024-09-29 12:56:00'), 'operation': 'Sell', 'coin': 'USDT', 'change': -45.07446, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv', 'gia_elaborata': False},
+#               #caso reale acquisto ETH usando EUR e pagando fee in BNB
+#               {'timestamp': pd.to_datetime('2022-04-14 20:50:01'), 'operation': 'Transaction Buy', 'coin': 'ETH','change': 0.0181, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv','gia_elaborata': False},
+#               {'timestamp': pd.to_datetime('2022-04-14 20:50:01'), 'operation': 'Transaction Spend', 'coin': 'EUR','change': -50.41936, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv','gia_elaborata': False},
+#               {'timestamp': pd.to_datetime('2022-04-14 20:50:01'), 'operation': 'Transaction Fee', 'coin': 'BNB','change': -0.00009858, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv','gia_elaborata': False},
+#              {'timestamp': pd.to_datetime('2025-04-21 18:55:00'), 'operation': 'Deposit', 'coin': 'USDC', 'change': 1000, 'remark': None, 'source': 'D:/730/2026/binance/asset\\1-1-2017--31-12-2025.csv', 'gia_elaborata': False}]
+#     df_prova = pd.DataFrame(prova).set_index('timestamp').sort_index()
+# #    coin_data = process_all_binance_operations(df_prova, scambi, None, start_dt, end_dt, quotazioni)
     coin_data = process_all_binance_operations(assets, scambi, None, FISCAL_YEAR_START, FISCAL_YEAR_END, quotazioni)
 
     print(coin_data)
