@@ -966,7 +966,7 @@ def elabora_sell(scambio, coin_data, timestamp, assets, i, quadro_RT, is_fiscal)
     log_movimento(coin_ricevuta, coin_data, f"SELL riceve {coin_ricevuta}", timestamp)
     log_movimento(fee_coin, coin_data, f"SELL fee {fee_coin}", timestamp)
 
-    if is_fiscal and coin_ricevuta in ['EUR', 'USDC']:
+    if is_fiscal and coin_ricevuta in ['EUR', 'USDC'] and c_venduta != 'EUR':
         # il corrispettivo è il valore in EUR della coin ricevuta
         qty_netta = qty_ricevuta - qty_fee if fee_coin == coin_ricevuta else qty_ricevuta
         if coin_ricevuta == 'EUR':
@@ -993,8 +993,9 @@ def elabora_sell(scambio, coin_data, timestamp, assets, i, quadro_RT, is_fiscal)
             'corrispettivo_eur': corrispettivo_eur,
             'plusvalenza': plusvalenza
         })
-
     return 0
+
+
 ###################################
 ## ELABORAZIONE DELLE OPERAZIONI ##
 ###################################
@@ -1112,7 +1113,6 @@ def process_all_binance_operations(assets, scambi, initial_portfolio, fiscal_sta
         'Launchpad Token Distribution', 'Launchpool Airdrop - System Distribution', 'Megadrop Rewards']:
             elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type, quadro_RT, is_fiscal)
 
-
     return coin_data, quadro_RT
 
 
@@ -1181,8 +1181,34 @@ if __name__ == '__main__':
 
     print(coin_data)
 
-    print("stampo scambi:")
-    print(scambi[scambi["coin"] =="POL"].to_string())
+    # salva quadro_RT in CSV
+    anno_fiscale = pd.to_datetime(FISCAL_YEAR_START).year
 
-    # print("stampo assets:")
-    # print(df_prova)
+    if quadro_RT:
+        nome_file_rt = os.path.join(BINANCE_BASE_DIR, f"QuadroRT_Binance_{anno_fiscale}.csv")
+        df_quadro_RT = pd.DataFrame(quadro_RT)
+        df_quadro_RT.to_csv(nome_file_rt, index=False, sep=';', decimal=',', encoding='utf-8-sig')
+        print(f"\nQuadro RT salvato in: {nome_file_rt}")
+        print(f"Righe totali: {len(df_quadro_RT)}")
+        plusvalenza_totale = df_quadro_RT['plusvalenza'].dropna().sum()
+        print(f"Plusvalenza totale: {plusvalenza_totale:.2f} EUR")
+    else:
+        print("\nNessuna operazione fiscalmente rilevante trovata per il quadro RT.")
+
+    # salva coin_data in CSV
+    nome_file_portfolio = os.path.join(BINANCE_BASE_DIR, f"Portfolio_Binance_{anno_fiscale}.csv")
+    df_portfolio = pd.DataFrame([
+        {
+            'coin': coin,
+            'quantity': data['quantity'],
+            'total_cost': data['total_cost'],
+            'Prezzo_Medio_Di_Carico': data['Prezzo_Medio_Di_Carico']
+        }
+        for coin, data in coin_data.items()
+        if data['quantity'] != 0  # esclude coin con quantità zero
+    ]).sort_values('total_cost', ascending=False)
+
+    df_portfolio.to_csv(nome_file_portfolio, index=False, sep=';', decimal=',', encoding='utf-8-sig')
+    print(f"\nPortfolio salvato in: {nome_file_portfolio}")
+    print(f"Coin in portafoglio: {len(df_portfolio)}")
+    print(df_portfolio.to_string(index=False))
