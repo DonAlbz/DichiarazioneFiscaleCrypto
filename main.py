@@ -702,7 +702,51 @@ def elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type, quadro_
 
 # le reward le considero come airdrop
 def elabora_reward(coin, change, timestamp, coin_data, assets, op_type, quadro_RT, is_fiscal):
-    elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type, quadro_RT, is_fiscal)
+    if coin == 'USDC' and quotazioni is not None:
+        # valorizza il reward USDC al tasso di cambio EUR del giorno
+        rate = get_price_at_timestamp(quotazioni['USDC-EUR'], pd.to_datetime(timestamp).normalize())
+        costo_reward = change * rate
+
+        # incrementa quantità e costo totale (NON a costo zero come gli altri airdrop)
+        coin_data[coin]['quantity'] += change
+        coin_data[coin]['total_cost'] += costo_reward
+
+        if coin_data[coin]['quantity'] > 0:
+            coin_data[coin]['Prezzo_Medio_Di_Carico'] = (
+                coin_data[coin]['total_cost'] / coin_data[coin]['quantity']
+            )
+
+        log_movimento(coin, coin_data, f"{op_type}", timestamp)
+
+        # setto la riga come già elaborata
+        col_idx = assets.columns.get_loc('gia_elaborata')
+        i_start, i_end = assets.index.slice_locs(timestamp, timestamp)
+        for pos in range(i_start, i_end):
+            row = assets.iloc[pos]
+            if (row['operation'] == op_type and
+                    row['coin'] == coin and
+                    row['change'] == change and
+                    not row['gia_elaborata']):
+                assets.iloc[pos, col_idx] = True
+                break
+
+        # compilazione quadro_RT: il reward USDC genera plusvalenza pari al suo intero valore
+        if is_fiscal:
+            quadro_RT.append({
+                'data': timestamp,
+                'operazione': op_type,
+                'coin_ceduta': None,
+                'qty_ceduta': None,
+                'pmc_coin_ceduta': None,
+                'costo_fiscale': 0,
+                'coin_ricevuta': coin,
+                'qty_ricevuta': change,
+                'corrispettivo_eur': costo_reward,
+                'plusvalenza': costo_reward
+            })
+    else:
+        # altri reward: trattati come airdrop, a costo zero
+        elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type, quadro_RT, is_fiscal)
 
 def elabora_buy(scambio, coin_data, timestamp, assets, i, quadro_RT, is_fiscal):
     # # discriminare il funzionamento in base al tipo di scambio
