@@ -60,8 +60,8 @@ from scipy.stats import false_discovery_control
 # Press Maiusc+F10 to execute it or replace it with your code.
 # Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
 COINBASE_INITIAL_FILE = 'D:/730/2026/coinbase_initial_simple.csv'
-BINANCE_BASE_DIR = 'D:/730/2026/binance'
-BINANCE_ASSET_MASTER = 'D:/730/2026/binance/asset/1-1-2017--31-12-2025.csv'
+BINANCE_BASE_DIR = 'D:/730/EROS/2026/binance/'
+BINANCE_ASSET_MASTER = 'D:/730/EROS/2026/binance/asset/1-1-2017--31-12-2025.csv'
 
 START_DATE = "2021-01-01"
 END_DATE = "2025-12-31 23:59:59"
@@ -73,6 +73,7 @@ DEBUG_COINS = {}
 quotazioni = None #{[]}
 pd.set_option('display.float_format', lambda x: f'{x:.8f}')
 quadro_RT = []
+prelievi = []
 
 
 def log_movimento(coin, coin_data, operazione, timestamp):
@@ -550,15 +551,27 @@ def deposita_coin(c, coin_data, qty, timestamp, coin_a_pmc_zero):
             pmc_deposito = 0
         # rate = quotazioni['EUR-USD'], pd.to_datetime(timestamp).normalize() #caso valore in USD
         coin_data[c]['total_cost'] += qty * pmc_deposito if pmc_deposito > 0 else raiseExceptions
-    coin_data[c]['Prezzo_Medio_Di_Carico'] = coin_data[c]['total_cost'] / coin_data[c]['quantity']
+    if c == 'EUR':
+        coin_data[c]['Prezzo_Medio_Di_Carico'] = 1
+    else:
+        coin_data[c]['Prezzo_Medio_Di_Carico'] = coin_data[c]['total_cost'] / coin_data[c]['quantity']
     # coin_data[c]['gia_elaborata'] = True
     log_movimento(c, coin_data, f"Deposit", timestamp)
 
 
-def preleva_coin(c, coin_data,qty, timestamp):
+def preleva_coin(c, coin_data, qty, timestamp):
     #nell'asset il prelievo ha già segno negativo
     coin_data[c]['quantity'] += qty
     log_movimento(c, coin_data, f"Withraw", timestamp)
+
+    prelievi.append({
+        'data': timestamp,
+        'coin': c,
+        'quantity': qty,
+        'valore': abs(qty) * coin_data[c]['Prezzo_Medio_Di_Carico'],
+        'total_cost': coin_data[c]['total_cost'],
+        'pmc': coin_data[c]['Prezzo_Medio_Di_Carico']
+    })
 
 def elabora_binance_convert(coin, change, timestamp, assets, coin_data, quadro_RT, is_fiscal):
     col_idx = assets.columns.get_loc('gia_elaborata')
@@ -682,9 +695,11 @@ def elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type, quadro_
 
     # ricalcola PMC (si abbassa perché aggiungiamo quantità a costo zero)
     if coin_data[coin]['quantity'] > 0:
-        coin_data[coin]['Prezzo_Medio_Di_Carico'] = (
+        if coin != 'EUR':
+
+            coin_data[coin]['Prezzo_Medio_Di_Carico'] = (
                 coin_data[coin]['total_cost'] / coin_data[coin]['quantity']
-        )
+            )
 
     log_movimento(coin, coin_data, f"{op_type}", timestamp)
 
@@ -712,9 +727,10 @@ def elabora_reward(coin, change, timestamp, coin_data, assets, op_type, quadro_R
         coin_data[coin]['total_cost'] += costo_reward
 
         if coin_data[coin]['quantity'] > 0:
-            coin_data[coin]['Prezzo_Medio_Di_Carico'] = (
-                coin_data[coin]['total_cost'] / coin_data[coin]['quantity']
-            )
+            if coin != 'EUR':
+                coin_data[coin]['Prezzo_Medio_Di_Carico'] = (
+                    coin_data[coin]['total_cost'] / coin_data[coin]['quantity']
+                )
 
         log_movimento(coin, coin_data, f"{op_type}", timestamp)
 
@@ -1110,9 +1126,9 @@ def process_all_binance_operations(assets, scambi, initial_portfolio, fiscal_sta
         qty_before = coin_data[coin]['quantity']
         cost_before = coin_data[coin]['total_cost']
 
-        if op_type == 'Deposit':
+        if op_type in ['Deposit', 'Fiat Deposit']:
             deposita_coin(coin, coin_data, change, timestamp, coin_a_pmc_zero)
-        elif op_type == 'Withdraw':
+        elif op_type in ['Withdraw','Binance Card Spending','Tax Payment']:
             preleva_coin(coin, coin_data, change, timestamp)
         elif op_type in ['Buy', 'Sell', 'Transaction Buy','Transaction Revenue', 'Transaction Spend', 'Transaction Sold']:
             start = timestamp - timedelta(minutes=2)
@@ -1253,6 +1269,15 @@ if __name__ == '__main__':
     ]).sort_values('total_cost', ascending=False)
 
     df_portfolio.to_csv(nome_file_portfolio, index=False, sep=';', decimal=',', encoding='utf-8-sig')
+    # salva prelievi in CSV
+    if prelievi:
+        nome_file_prelievi = os.path.join(BINANCE_BASE_DIR, "prelievo_binance.csv")
+        df_prelievi = pd.DataFrame(prelievi)
+        df_prelievi.to_csv(nome_file_prelievi, index=False, sep=';', decimal=',', encoding='utf-8-sig')
+        print(f"\nPrelievi salvati in: {nome_file_prelievi}")
+        print(f"Righe totali: {len(df_prelievi)}")
+    else:
+        print("\nNessun prelievo registrato.")
     print(f"\nPortfolio salvato in: {nome_file_portfolio}")
     print(f"Coin in portafoglio: {len(df_portfolio)}")
     print(df_portfolio.to_string(index=False))
