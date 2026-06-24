@@ -60,8 +60,8 @@ from scipy.stats import false_discovery_control
 # Press Maiusc+F10 to execute it or replace it with your code.
 # Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
 COINBASE_INITIAL_FILE = 'D:/730/2026/coinbase_initial_simple.csv'
-BINANCE_BASE_DIR = 'D:/730/EROS/2026/binance/'
-BINANCE_ASSET_MASTER = 'D:/730/EROS/2026/binance/asset/1-1-2017--31-12-2025.csv'
+BINANCE_BASE_DIR = 'D:/730/2026/binance/'
+BINANCE_ASSET_MASTER = 'D:/730/2026/binance/asset/1-1-2017--31-12-2025.csv'
 
 START_DATE = "2021-01-01"
 END_DATE = "2025-12-31 23:59:59"
@@ -82,6 +82,17 @@ def log_movimento(coin, coin_data, operazione, timestamp):
               f"qty={coin_data[coin]['quantity']:.8f} | "
               f"cost={coin_data[coin]['total_cost']:.8f} | "
               f"PMC={coin_data[coin]['Prezzo_Medio_Di_Carico']:.8f}")
+
+def marca_elaborata(assets, pos, coin, coin_data):
+    col_idx_elab = assets.columns.get_loc('gia_elaborata')
+    col_idx_cost = assets.columns.get_loc('total_cost_snapshot')
+    col_idx_pmc = assets.columns.get_loc('pmc_snapshot')
+    col_idx_qty = assets.columns.get_loc('qty_snapshot')
+
+    assets.iloc[pos, col_idx_elab] = True
+    assets.iloc[pos, col_idx_cost] = coin_data[coin]['total_cost']
+    assets.iloc[pos, col_idx_pmc] = coin_data[coin]['Prezzo_Medio_Di_Carico']
+    assets.iloc[pos, col_idx_qty] = coin_data[coin]['quantity']
 
 def load_asset(start_ts, end_ts, asset_dir = BINANCE_BASE_DIR + "/asset/"):
     """
@@ -561,6 +572,8 @@ def deposita_coin(c, coin_data, qty, timestamp, coin_a_pmc_zero):
 
 def preleva_coin(c, coin_data, qty, timestamp):
     #nell'asset il prelievo ha già segno negativo
+    if c == 'EURPS':
+        c = 'EUR'
     coin_data[c]['quantity'] += qty
     log_movimento(c, coin_data, f"Withraw", timestamp)
 
@@ -633,8 +646,17 @@ def elabora_binance_convert(coin, change, timestamp, assets, coin_data, quadro_R
     # PMC coin venduta rimane invariato per proprietà matematica
 
     # aggiorno coin ricevuta
+    if coin_ricevuta == 'EUR':
+        valore_nuovo_asset = qty_ricevuta
+    elif coin_ricevuta == 'USDC' and quotazioni is not None:
+        rate = get_price_at_timestamp(quotazioni['USDC-EUR'], pd.to_datetime(timestamp).normalize())
+        valore_nuovo_asset = qty_ricevuta * rate
+    else:
+        valore_nuovo_asset = costo_venduta
+
+    # aggiorno coin ricevuta
     coin_data[coin_ricevuta]['quantity'] += qty_ricevuta
-    coin_data[coin_ricevuta]['total_cost'] += costo_venduta
+    coin_data[coin_ricevuta]['total_cost'] += valore_nuovo_asset  # SOSTITUITO costo_venduta
 
     if coin_ricevuta == 'EUR':
         coin_data[coin_ricevuta]['Prezzo_Medio_Di_Carico'] = 1
@@ -655,11 +677,11 @@ def elabora_binance_convert(coin, change, timestamp, assets, coin_data, quadro_R
                 row['coin'] == coin and
                 row['change'] == change and
                 not row['gia_elaborata']):
-            assets.iloc[pos, col_idx] = True
+            marca_elaborata(assets, pos, coin, coin_data)
             break
 
     # riga controparte
-    assets.iloc[controparte_pos, col_idx] = True
+    marca_elaborata(assets, controparte_pos, controparte['coin'], coin_data)
     # compilazione quadro_RT
     if is_fiscal:
         if coin_ricevuta == 'EUR':
@@ -712,7 +734,7 @@ def elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type, quadro_
                 row['coin'] == coin and
                 row['change'] == change and
                 not row['gia_elaborata']):
-            assets.iloc[pos, col_idx] = True
+            marca_elaborata(assets, pos, coin, coin_data)
             break
 
 # le reward le considero come airdrop
@@ -743,7 +765,7 @@ def elabora_reward(coin, change, timestamp, coin_data, assets, op_type, quadro_R
                     row['coin'] == coin and
                     row['change'] == change and
                     not row['gia_elaborata']):
-                assets.iloc[pos, col_idx] = True
+                marca_elaborata(assets, pos, coin, coin_data)
                 break
 
         # compilazione quadro_RT: il reward USDC genera plusvalenza pari al suo intero valore
@@ -812,38 +834,82 @@ def elabora_buy(scambio, coin_data, timestamp, assets, i, quadro_RT, is_fiscal):
     # salvo quantità fee
     qty_fee = scambio['fee']
 
+    # Calcolo preliminare della quantità netta acquistata
+    qty_netta_acquistata = qty - qty_fee if fee_coin == c else qty
 
-    # Se la fee è nella stessa coin della coin acquistata:
-    if fee_coin == c:
-
-        # incremento quantità coin acquistata
-        coin_data[c]['quantity'] += qty - qty_fee
-        # if (c =="ETH" or c == "BETH"):
-        #     print(f"{timestamp} aggiunti {qty - qty_fee} ETH. ETH tot: {coin_data[c]['quantity']}")
-
-
+    # 1. Determino il nuovo valore da assegnare alla coin acquistata (risolve il bug del PMC)
+    if c == 'EUR':
+        valore_nuovo_asset = qty_netta_acquistata
+    elif c == 'USDC' and quotazioni is not None:
+        rate = get_price_at_timestamp(quotazioni['USDC-EUR'], pd.to_datetime(timestamp).normalize())
+        valore_nuovo_asset = qty_netta_acquistata * rate
     else:
-        #Se la fee è in una coin diversa dalla coin acquistata:
+        # Se è un acquisto standard di crypto, eredita il costo della coin venduta
+        valore_nuovo_asset = costo_coin_venduta
 
-        # incremento quantità coin acquistata
-        coin_data[c]['quantity'] += qty
-        # if (c =="ETH" or c == "BETH"):
-        #     print(f"{timestamp} aggiunti {qty} ETH. ETH tot: {coin_data[c]['quantity']}")
-
-        #calcolo valore fiscale della coin venduta
-        valore_fiscale_fee = qty_fee * coin_data[fee_coin]['Prezzo_Medio_Di_Carico']
-
-        # calcolo il costo della coin venduta aggiungendo il valore fiscale della fee
-        costo_coin_venduta += valore_fiscale_fee
-
-        # modifico quantità coin fee
-        coin_data[fee_coin]['quantity'] -= qty_fee
-
-    # aggiorno il costo totale della coin venduta (il suo PMC rimane uguale per proprietà matematica)
+    # 2. Assegnazione del nuovo valore, delle quantità e correzione decrementi ereditari
+    # Decremento sempre il costo reale della coin venduta dal suo total_cost
     coin_data[coin_venduta]['total_cost'] -= costo_coin_venduta
 
-    # assegno il nuovo costo totale alla coin acquistata
-    coin_data[c]['total_cost'] += costo_coin_venduta
+    if fee_coin == c:
+        coin_data[c]['quantity'] += qty_netta_acquistata
+        coin_data[c]['total_cost'] += valore_nuovo_asset
+    else:
+        coin_data[c]['quantity'] += qty
+
+        # Gestione corretta della fee in valuta diversa (e relativo decremento bilanciato)
+        valore_fiscale_fee = qty_fee * coin_data[fee_coin]['Prezzo_Medio_Di_Carico']
+        coin_data[fee_coin]['quantity'] -= qty_fee
+        coin_data[fee_coin]['total_cost'] -= valore_fiscale_fee
+
+        # La fee aumenta il costo di carico dell'asset acquistato se non è una valuta fissa (EUR/USDC)
+        if c not in ['EUR', 'USDC']:
+            coin_data[c]['total_cost'] += (valore_nuovo_asset + valore_fiscale_fee)
+        else:
+            coin_data[c]['total_cost'] += valore_nuovo_asset
+    # # Se la fee è nella stessa coin della coin acquistata:
+    # if fee_coin == c:
+    #
+    #     # incremento quantità coin acquistata
+    #     coin_data[c]['quantity'] += qty - qty_fee
+    #     # if (c =="ETH" or c == "BETH"):
+    #     #     print(f"{timestamp} aggiunti {qty - qty_fee} ETH. ETH tot: {coin_data[c]['quantity']}")
+    #
+    #
+    # else:
+    #     #Se la fee è in una coin diversa dalla coin acquistata:
+    #
+    #     # incremento quantità coin acquistata
+    #     coin_data[c]['quantity'] += qty
+    #     # if (c =="ETH" or c == "BETH"):
+    #     #     print(f"{timestamp} aggiunti {qty} ETH. ETH tot: {coin_data[c]['quantity']}")
+    #
+    #     #calcolo valore fiscale della coin venduta
+    #     valore_fiscale_fee = qty_fee * coin_data[fee_coin]['Prezzo_Medio_Di_Carico']
+    #
+    #     # calcolo il costo della coin venduta aggiungendo il valore fiscale della fee
+    #     costo_coin_venduta += valore_fiscale_fee
+    #
+    #     # modifico quantità coin fee
+    #     coin_data[fee_coin]['quantity'] -= qty_fee
+    #
+    # # aggiorno il costo totale della coin venduta (il suo PMC rimane uguale per proprietà matematica)
+    # coin_data[coin_venduta]['total_cost'] -= costo_coin_venduta
+    #
+    # # calcolo il nuovo costo totale alla coin acquistata, EUR pmc = 1, se USDC valore di mercato
+    # # (perché è fiscalmente rilevante e produce plusvalenza), altrimenti il costo viene trasferito
+    # # dalla coin venduta
+    # if c == 'EUR':
+    #     valore_nuovo_asset = qty - qty_fee if fee_coin == c else qty
+    # elif c == 'USDC' and quotazioni is not None:
+    #     rate = get_price_at_timestamp(quotazioni['USDC-EUR'], pd.to_datetime(timestamp).normalize())
+    #     qty_da_valorizzare = qty - qty_fee if fee_coin == c else qty
+    #     valore_nuovo_asset = qty_da_valorizzare * rate
+    # else:
+    #     valore_nuovo_asset = costo_coin_venduta
+    #
+    #     # assegno il nuovo costo totale alla coin acquistata
+    # coin_data[c]['total_cost'] += valore_nuovo_asset  # SOSTITUITO costo_coin_venduta
 
     # calcolo il nuovo PMC della coin acquistata
     #print(f'Sto calcolando il PMC di {c} acquistata in data {timestamp}')
@@ -867,7 +933,7 @@ def elabora_buy(scambio, coin_data, timestamp, assets, i, quadro_RT, is_fiscal):
                 row['coin'] == fee_coin and
                 row['change'] == (-1 * qty_fee) and
                 not row['gia_elaborata']):
-            assets.iloc[pos, col_idx] = True
+            marca_elaborata(assets, pos, fee_coin, coin_data)
             break
 
     # --- setto la coin ACQUISTATA (BUY) come già elaborata ---
@@ -878,7 +944,7 @@ def elabora_buy(scambio, coin_data, timestamp, assets, i, quadro_RT, is_fiscal):
                 row['coin'] == c and
                 row['change'] == qty and
                 not row['gia_elaborata']):
-            assets.iloc[pos, col_idx] = True
+            marca_elaborata(assets, pos, c, coin_data)
             break
 
     # --- cerco e setto la coin VENDUTA (SELL) come già elaborata ---
@@ -891,7 +957,7 @@ def elabora_buy(scambio, coin_data, timestamp, assets, i, quadro_RT, is_fiscal):
                 row['coin'] == coin_venduta and
                 row['change'] == (-1 * qty_coin_venduta) and
                 not row['gia_elaborata']):
-            assets.iloc[pos, col_idx] = True
+            marca_elaborata(assets, pos, coin_venduta, coin_data)
             trovata = True
             break
 
@@ -963,19 +1029,33 @@ def elabora_sell(scambio, coin_data, timestamp, assets, i, quadro_RT, is_fiscal)
     coin_data[c_venduta]['quantity'] -= qty_venduta
     coin_data[c_venduta]['total_cost'] -= costo_coin_venduta
 
-    # gestione coin ricevuta e fee
+    # Calcolo preliminare della quantità netta
+    qty_netta_ricevuta = qty_ricevuta - qty_fee if fee_coin == coin_ricevuta else qty_ricevuta
+
+    # 1. Determino il nuovo valore da assegnare alla coin ricevuta (risolve il bug del PMC a 0,19€)
+    if coin_ricevuta == 'EUR':
+        valore_nuovo_asset = qty_netta_ricevuta
+    elif coin_ricevuta == 'USDC' and quotazioni is not None:
+        rate = get_price_at_timestamp(quotazioni['USDC-EUR'], pd.to_datetime(timestamp).normalize())
+        valore_nuovo_asset = qty_netta_ricevuta * rate
+    else:
+        # Se è uno scambio tra due crypto (es. BTC -> ETH), eredita il costo storico
+        valore_nuovo_asset = costo_coin_venduta
+
+    # 2. Assegnazione del nuovo valore e delle quantità
     if fee_coin == coin_ricevuta:
-        qty_netta_ricevuta = qty_ricevuta - qty_fee
         coin_data[coin_ricevuta]['quantity'] += qty_netta_ricevuta
-        coin_data[coin_ricevuta]['total_cost'] += costo_coin_venduta
+        coin_data[coin_ricevuta]['total_cost'] += valore_nuovo_asset
     else:
         coin_data[coin_ricevuta]['quantity'] += qty_ricevuta
-        coin_data[coin_ricevuta]['total_cost'] += costo_coin_venduta
+        coin_data[coin_ricevuta]['total_cost'] += valore_nuovo_asset
+
+        # Gestione della fee in valuta diversa
         valore_fiscale_fee = qty_fee * coin_data[fee_coin]['Prezzo_Medio_Di_Carico']
         coin_data[fee_coin]['quantity'] -= qty_fee
         coin_data[fee_coin]['total_cost'] -= valore_fiscale_fee
 
-    # aggiorno PMC coin ricevuta
+
     if coin_ricevuta == 'EUR':
         coin_data[coin_ricevuta]['Prezzo_Medio_Di_Carico'] = 1
     elif coin_data[coin_ricevuta]['quantity'] > 0:
@@ -998,7 +1078,7 @@ def elabora_sell(scambio, coin_data, timestamp, assets, i, quadro_RT, is_fiscal)
                 row['coin'] == c_venduta and
                 row['change'] == -qty_venduta and
                 not row['gia_elaborata']):
-            assets.iloc[pos, col_idx] = True
+            marca_elaborata(assets, pos, c_venduta, coin_data)
             break
 
     # --- setto la coin RICEVUTA in assets come già elaborata ---
@@ -1009,7 +1089,7 @@ def elabora_sell(scambio, coin_data, timestamp, assets, i, quadro_RT, is_fiscal)
                 row['coin'] == coin_ricevuta and
                 row['change'] == qty_ricevuta and
                 not row['gia_elaborata']):
-            assets.iloc[pos, col_idx] = True
+            marca_elaborata(assets, pos, coin_ricevuta, coin_data)
             break
 
     # --- setto la FEE in assets come già elaborata ---
@@ -1020,7 +1100,7 @@ def elabora_sell(scambio, coin_data, timestamp, assets, i, quadro_RT, is_fiscal)
                 row['coin'] == fee_coin and
                 row['change'] == -qty_fee and
                 not row['gia_elaborata']):
-            assets.iloc[pos, col_idx] = True
+            marca_elaborata(assets, pos, fee_coin, coin_data)
             break
     log_movimento(c_venduta, coin_data, f"SELL vende {c_venduta}", timestamp)
     log_movimento(coin_ricevuta, coin_data, f"SELL riceve {coin_ricevuta}", timestamp)
@@ -1104,6 +1184,10 @@ def process_all_binance_operations(assets, scambi, initial_portfolio, fiscal_sta
     #ordinamento assets come Pandas DataFrame
     assets.sort_index(inplace=True)
 
+    assets['total_cost_snapshot'] = None
+    assets['pmc_snapshot'] = None
+    assets['qty_snapshot'] = None
+
     fiscal_start_dt = pd.to_datetime(fiscal_start)
     fiscal_end_dt = pd.to_datetime(fiscal_end)
 
@@ -1128,8 +1212,10 @@ def process_all_binance_operations(assets, scambi, initial_portfolio, fiscal_sta
 
         if op_type in ['Deposit', 'Fiat Deposit']:
             deposita_coin(coin, coin_data, change, timestamp, coin_a_pmc_zero)
-        elif op_type in ['Withdraw','Binance Card Spending','Tax Payment']:
+            marca_elaborata(assets, pos, coin, coin_data)
+        elif op_type in ['Withdraw','Binance Card Spending','Tax Payment','Fiat Withdraw']:
             preleva_coin(coin, coin_data, change, timestamp)
+            marca_elaborata(assets, pos, coin, coin_data)
         elif op_type in ['Buy', 'Sell', 'Transaction Buy','Transaction Revenue', 'Transaction Spend', 'Transaction Sold']:
             start = timestamp - timedelta(minutes=2)
             end = timestamp + timedelta(minutes=2)
@@ -1170,7 +1256,8 @@ def process_all_binance_operations(assets, scambi, initial_portfolio, fiscal_sta
                          'ETH 2.0 Staking Rewards', 'Swap Farming Rewards', ]:
             elabora_reward(coin, change, timestamp, coin_data, assets, op_type, quadro_RT, is_fiscal)
         elif op_type in ['HODLer Airdrops Distribution', 'Launchpool Airdrop - User Claim Distribution',
-        'Launchpad Token Distribution', 'Launchpool Airdrop - System Distribution', 'Megadrop Rewards']:
+        'Launchpad Token Distribution', 'Launchpool Airdrop - System Distribution', 'Megadrop Rewards',
+                         'BNB Vault Rewards','Airdrop Assets','Simple Earn Flexible Airdrop']:
             elabora_airdrop(coin, change, timestamp, coin_data, assets, op_type, quadro_RT, is_fiscal)
 
     return coin_data, quadro_RT
@@ -1281,3 +1368,14 @@ if __name__ == '__main__':
     print(f"\nPortfolio salvato in: {nome_file_portfolio}")
     print(f"Coin in portafoglio: {len(df_portfolio)}")
     print(df_portfolio.to_string(index=False))
+
+    nome_file_assets_proc = os.path.join(BINANCE_BASE_DIR, f"Assets_processati_{anno_fiscale}.csv")
+    df_assets_export = assets.reset_index().rename(columns={
+        'total_cost_snapshot': 'total_cost',
+        'pmc_snapshot': 'pmc',
+        'qty_snapshot': 'quantity'
+    })
+    df_assets_export.to_csv(nome_file_assets_proc, index=False, sep=';', decimal=',', encoding='utf-8-sig')
+    print(f"\nAssets processati salvati in: {nome_file_assets_proc}")
+    print(f"Righe totali: {len(df_assets_export)}")
+    print(f"Righe NON processate: {(~df_assets_export['gia_elaborata']).sum()}")
